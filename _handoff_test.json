@@ -1,0 +1,123 @@
+{
+  "hi": {
+    "answer": "The Faculty of Science offers five four-year undergraduate programs: Computer Science, Geology, Applied Chemistry, Marine Science, and Mathematics.",
+    "conversation_id": null,
+    "needs_human": false,
+    "handoff_offered": false,
+    "low_confidence": false,
+    "top_similarity": 0.726932980807649,
+    "intent": {
+      "topic": "faculty_programs",
+      "faculty": "Science"
+    },
+    "sources": [
+      {
+        "id": "e2fe83a3-2e93-4aa5-9aa9-1df444ce81ea",
+        "topic": "faculty_programs",
+        "faculty": "Science",
+        "confidence": "placeholder",
+        "source_url": null,
+        "similarity": 0.726932980807649
+      },
+      {
+        "id": "67c62d69-69e3-4f4c-a03c-d69513eac536",
+        "topic": "faculty_programs",
+        "faculty": "Science",
+        "confidence": "placeholder",
+        "source_url": null,
+        "similarity": 0.554662363370138
+      },
+      {
+        "id": "2e1f71c5-5046-400d-8da5-289a89195c16",
+        "topic": "faculty_programs",
+        "faculty": "Science",
+        "confidence": "placeholder",
+        "source_url": null,
+        "similarity": 0.54413766195031
+      },
+      {
+        "id": "e6573de7-abd3-4a16-b001-40bfc64d507b",
+        "topic": "faculty_programs",
+        "faculty": "Science",
+        "confidence": "placeholder",
+        "source_url": null,
+        "similarity": 0.53586668203672
+      },
+      {
+        "id": "4a368f88-1ab8-45ca-ac6f-1839711c1d3b",
+        "topic": "faculty_programs",
+        "faculty": "Science",
+        "confidence": "placeholder",
+        "source_url": null,
+        "similarity": 0.516438589969749
+      }
+    ]
+  },
+  "lo": {
+    "answer": "I do not have that information in the knowledge base. You may want to check other sources for the current price of Bitcoin and the winner of the World Cup.\n\nI don't have that information. Would you like me to connect you with an admin?",
+    "conversation_id": "e558f82b-bb1f-4a9c-a15b-5a25de1d84f3",
+    "needs_human": false,
+    "handoff_offered": true,
+    "low_confidence": true,
+    "top_similarity": 0.392476660910051,
+    "intent": {
+      "topic": null,
+      "faculty": null
+    },
+    "sources": [
+      {
+        "id": "8652da2a-f4e8-478e-8641-a94d8659521b",
+        "topic": "fees",
+        "faculty": null,
+        "confidence": "confirmed",
+        "source_url": "https://snu.edu.so/admission/administrative-charges/",
+        "similarity": 0.392476660910051
+      },
+      {
+        "id": "93647a74-fff0-46d5-8769-9100a3b86f16",
+        "topic": "admission_requirements",
+        "faculty": null,
+        "confidence": "confirmed",
+        "source_url": "https://snu.edu.so/admission/admission-requirements/",
+        "similarity": 0.383565641429089
+      },
+      {
+        "id": "01a1b39b-905f-4eca-9e37-7c9dde843679",
+        "topic": "online_application",
+        "faculty": null,
+        "confidence": "confirmed",
+        "source_url": "https://student.snu.edu.so/admission/online-application",
+        "similarity": 0.376646473807517
+      },
+      {
+        "id": "43bf8abc-5e94-4c23-88fe-7ffad4b53ecd",
+        "topic": "placement_results",
+        "faculty": null,
+        "confidence": "placeholder",
+        "source_url": null,
+        "similarity": 0.370872855186465
+      },
+      {
+        "id": "472d3a07-8f05-49df-8cd3-a75d2b72e576",
+        "topic": "admission_exam",
+        "faculty": null,
+        "confidence": "placeholder",
+        "source_url": null,
+        "similarity": 0.370671153068545
+      }
+    ]
+  },
+  "yes": {
+    "answer": "I've connected you with an admin. Someone from the team will follow up with you shortly.",
+    "conversation_id": "e558f82b-bb1f-4a9c-a15b-5a25de1d84f3",
+    "needs_human": true,
+    "handoff_offered": false,
+    "low_confidence": false,
+    "top_similarity": null,
+    "intent": {
+      "topic": null,
+      "faculty": null
+    },
+    "sources": []
+  }
+}

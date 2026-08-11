@@ -1,0 +1,23 @@
+question,answer,intent_topic,intent_faculty,top_similarity,low_confidence,needs_human,handoff_offered,num_sources,confidence_of_top_source
+What documents do I need to submit for the online application?,"For undergraduate admission, you need to submit official transcripts and certificates, a valid national ID or passport. For postgraduate admission, you need to submit official transcripts, recommendation letters where required, and a research proposal for research-based programs. Additionally, all applicants should provide certified copies of academic documents and a passport copy.",admission_requirements,,0.622412659073632,false,false,false,3,confirmed
+What programs does the Faculty of Engineering offer?,"The Faculty of Engineering offers four four-year undergraduate programs: 
+1. Bachelor of Civil Engineering 
+2. Bachelor of Mechanical Engineering 
+3. Bachelor of Electrical Engineering 
+4. Bachelor of Architectural Engineering",faculty_programs,Engineering,0.714891314506531,false,false,false,1,confirmed
+What subjects are covered in the SNU admission exam?,"The SNU admission exam covers English plus four scientific subjects: Biology, Chemistry, Physics, and Mathematics, drawn from the Somali secondary school curriculum. However, applicants whose faculty choice includes Sharia and Law are examined on a different set of subjects instead.",admission_exam,,0.753141477516803,false,false,false,2,placeholder
+Can I choose two Tier 1 faculties as my top choices?,"No, you may select at most one Tier 1 faculty among your three choices.",faculty_tiers,,0.7738806239927,false,false,false,3,placeholder
+What score do I need to get placed into my first-choice faculty?,You need a score of 70% or above to be placed into your first-choice faculty.,,,0.743423267806965,false,false,false,5,placeholder
+How much will I spend total for the Faculty of Law program?,"To estimate the total cost for the Faculty of Law program, combine: 
+- a $30 exam fee, 
+- a $50 ID/registration fee (or $55, as per the Admission Requirements page, but for faculty-specific charge, $50-$125 is used, and Law's administrative charge is $80), 
+- the Law faculty's specific administrative charge, which is $80, 
+- the $350 Foundation/EAP program fee, 
+- $125 per semester multiplied by the number of semesters in the program (the Law program is 4 years, so 8 semesters), 
+- and $10 per ID renewal (one renewal roughly every 2 years of study, so 2 renewals for a 4-year program).
+
+The calculation is: $30 (exam) + $50 (ID/registration) + $80 (administrative charge) + $350 (Foundation/EAP) + $125 * 8 (semesters) + $10 * 2 (ID renewals) = $30 + $50 + $80 + $350 + $1000 + $20 = $1530.",fees,Law,0.659721910332615,false,false,false,6,placeholder
+What happens after I pass the admission exam?,I do not have that information in the knowledge base. You can check snu.edu.so or contact admissions for more information on what happens after passing the admission exam.,admission_exam,,0.6294046198612,false,false,false,2,placeholder
+How can I check my enrollment status?,You should check the SNU student portal directly to see your registration status.,,,0.61919474601746,false,false,false,5,confirmed
+Where is SNU located and how can I contact admissions?,"Somali National University (SNU) is located in Mogadishu, Somalia, with its main address at Columbia Rd, Hamar Weyne, P.O. Box 15. You can contact admissions by phone at +252 866002, +252 866003, or +252 866004, or by email at jus@snu.edu.so. Additionally, you can visit the official website at snu.edu.so or the online application portal at student.snu.edu.so/admission/home.",university_identity,,0.713038367810153,false,false,false,2,confirmed
+What is the mode of study at SNU — is it full-time or part-time?,"I do not have that information in the knowledge base. For details on the mode of study at Somali National University, I suggest checking the official SNU website at snu.edu.so or contacting the Admissions Office.",mode_of_study,,0.797760033540727,false,false,false,1,confirmed

@@ -1,0 +1,306 @@
+[
+  {
+    "content": "Somali National University (SNU), known in Somali as Jaamacadda Ummadda Soomaaliyeed (JUS), is a public non-profit university in Mogadishu, Somalia. Its main address is Columbia Rd, Hamar Weyne, P.O. Box 15, Mogadishu. Admission can be reached by phone at +252 866002, +252 866003, or +252 866004, or by email at jus@snu.edu.so. The official website is snu.edu.so and the online application portal is student.snu.edu.so/admission/home.",
+    "topic": "university_identity",
+    "faculty": null,
+    "source_url": "https://snu.edu.so/admission/",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "SNU has five campuses listed on its official website: Shabelle Campus, Science & Technology Campus (Km4), Gahayr Campus, Abudwaq Campus, and Badhan Campus.",
+    "topic": "university_identity",
+    "faculty": null,
+    "source_url": "https://snu.edu.so/",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "For undergraduate admission, applicants must hold a recognized Somali Secondary School Certificate or equivalent, meet minimum entry requirements set by the Ministry of Education and SNU, submit official transcripts and certificates, provide a valid national ID or passport, complete any required entrance examination or interview where applicable, and pay a non-refundable Registration & ID Card Fee of $55.",
+    "topic": "admission_requirements",
+    "faculty": null,
+    "source_url": "https://snu.edu.so/admission/admission-requirements/",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "For postgraduate admission, applicants must hold a recognized Bachelor's degree from an accredited university, meet the minimum GPA required by the faculty, submit official transcripts, provide recommendation letters where required, submit a research proposal for research-based programs, attend an interview if requested, and pay a non-refundable Registration & ID Card Fee of $50.",
+    "topic": "admission_requirements",
+    "faculty": null,
+    "source_url": "https://snu.edu.so/admission/admission-requirements/",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "International applicants to SNU should provide equivalent academic qualifications, certified copies of academic documents, a passport copy, English language proficiency where required, and document authentication, and pay a non-refundable Registration & ID Card Fee of $55. Admission requirements can vary by program and level of study, so not every undergraduate program has identical requirements.",
+    "topic": "admission_requirements",
+    "faculty": null,
+    "source_url": "https://snu.edu.so/admission/admission-requirements/",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "The SNU online undergraduate application form collects: personal information (full name, mobile, mother's name, gender, date of birth, place of birth, blood group, email, nationality, national ID, special needs, region, address, photo), educational background (school name, country, region, city, certificate type, exam roll number, certificate number), campus and exam location choice, three ranked faculty choices, guardian information (name, mobile, relation), and payment information (bank, reference number, receipt).",
+    "topic": "online_application",
+    "faculty": null,
+    "source_url": "https://student.snu.edu.so/admission/online-application",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "Required uploads for the SNU online application are: a passport photo, an identification document (NIRA, passport, or birth certificate), a high school certificate or exam card, and a bank payment receipt. File limits: student photo up to 5MB (PNG/JPG/JPEG/GIF); payment receipt up to 10MB (PDF/JPG/PNG); school certificate and ID documents up to 10MB (PDF/DOC/DOCX/JPG/PNG).",
+    "topic": "online_application",
+    "faculty": null,
+    "source_url": "https://student.snu.edu.so/admission/online-application",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "As of the last check, the SNU student portal displayed the 2025-2026 academic year intake with registration status shown as Closed. Applicants should check the online portal directly to see whether a new application period is open.",
+    "topic": "application_status",
+    "faculty": null,
+    "source_url": "https://student.snu.edu.so/admission/home",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "To apply to SNU: choose a preferred program from the available faculties, review admission requirements, prepare required documents (academic certificates, transcripts, passport photos, national ID or birth certificate), complete the online application form or submit a printed form at the Admission Office, pay the application fee, submit before the deadline, track the application status, and wait for the admission decision. Successful applicants receive an official Admission Letter with registration instructions.",
+    "topic": "how_to_apply",
+    "faculty": null,
+    "source_url": "https://snu.edu.so/admission/how-to-apply/",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "SNU's Administrative Charges page lists faculty-specific undergraduate charges: Agriculture & Environmental Science $80, Economic & Management Science $80, Education $50, Engineering $125, Health Sciences & Tropical Medicine $100, Languages $80, Law $80, Medicine & Surgery $125, Science $125, Sharia & Islamic Studies $50, Social Science $80, Veterinary Medicine & Animal Husbandry $80. Tuition itself is listed as free for all of these; the administrative charge is the payable fee. All undergraduate students must also complete a compulsory Foundation Programme, including 5 levels of English for Academic Purposes (EAP) totaling $350.",
+    "topic": "fees",
+    "faculty": null,
+    "source_url": "https://snu.edu.so/admission/administrative-charges/",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "There is a known conflict between two official SNU fee pages: the Admission Requirements page states a flat $55 Registration & ID Card Fee for undergraduates, while the Administrative Charges page lists separate faculty-specific charges of $50-$125. These are not the same fee and should not be added together. When a student asks about the faculty-specific charge, use the Administrative Charges figure; when asked about the Registration & ID Card Fee specifically, use the $55 figure; otherwise, note that the exact total should be confirmed with SNU Admission.",
+    "topic": "fees",
+    "faculty": null,
+    "source_url": "https://snu.edu.so/admission/administrative-charges/",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "SNU's academic calendar page covers admission application periods, entrance examinations, registration dates, semester start, add/drop deadlines, mid-semester and final exams, graduation, public holidays, and academic breaks for the 2025-2026 academic year. Exact dates are not exposed in the page text directly; students should be directed to the official academic calendar page or the Admission Office for exact current deadlines, since no date should be invented.",
+    "topic": "academic_calendar",
+    "faculty": null,
+    "source_url": "https://snu.edu.so/admission/academic-calendar/",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "SNU's Mode of Study page exists in the site navigation, but its content could not be reliably retrieved. Do not claim SNU offers full-time, part-time, evening, online, or distance study modes unless confirmed by an official source; direct students asking about mode of study to the official page or the Admission Office.",
+    "topic": "mode_of_study",
+    "faculty": null,
+    "source_url": "https://snu.edu.so/admission/mode-of-study/",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "SNU offers 12 undergraduate faculties: Agriculture and Environmental Science, Economic and Management Science, Education, Engineering, Health Sciences and Tropical Medicine, Languages, Law, Medicine and Surgery, Science, Sharia and Islamic Studies, Social Science, and Veterinary Medicine and Animal Husbandry. It also has a Faculty of Graduate Studies and Research, a School of Management and Public Administration, and an English Language Institute.",
+    "topic": "faculty_list",
+    "faculty": null,
+    "source_url": "https://snu.edu.so/academics/",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "The Faculty of Agriculture and Environmental Science offers three undergraduate programs: Bachelor of General Agriculture (originally established 1971, training in crop production, soil and water conservation, pest control, and extension services), Bachelor of Plant Protection (pest identification, integrated pest management, climate-smart practices), and Bachelor of Environmental Science (environmental conservation, climate change adaptation, natural resource management).",
+    "topic": "faculty_programs",
+    "faculty": "Agriculture and Environmental Science",
+    "source_url": "https://snu.edu.so/academics/undergraduate/faculty-of-agriculture-and-environmental-science",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "The Faculty of Economic and Management Science has four departments: Economics (economic theory, policy analysis, quantitative methods), Business Management (management, entrepreneurship, marketing, HR, strategic planning), Accounting & Finance (accounting principles, financial management, auditing, taxation, investment), and Statistics & Planning (statistical analysis, data science, research methodology, development planning).",
+    "topic": "faculty_programs",
+    "faculty": "Economic and Management Science",
+    "source_url": "https://snu.edu.so/academics/undergraduate/faculty-of-economic-and-management-science",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "The Faculty of Education, originally the Lafoole College of Education established in 1963, offers: Bachelor of Education in Biology & Chemistry, Bachelor of Education in Chemistry & Biology, Bachelor of Education in Mathematics & Physics, Bachelor of Education in English Language (all four-year programs), and a Diploma in Teacher Training for primary and lower secondary education.",
+    "topic": "faculty_programs",
+    "faculty": "Education",
+    "source_url": "https://snu.edu.so/academics/undergraduate/faculty-of-education",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "The Faculty of Engineering, established 1974 and re-established in 2016, offers four four-year undergraduate programs: Bachelor of Civil Engineering (structural, geotechnical, transportation, water resources), Bachelor of Mechanical Engineering (mechanics, thermodynamics, manufacturing, materials science), Bachelor of Electrical Engineering (power systems, electronics, telecommunications, control systems), and Bachelor of Architectural Engineering (architectural design, structural systems, urban planning).",
+    "topic": "faculty_programs",
+    "faculty": "Engineering",
+    "source_url": "https://snu.edu.so/academics/undergraduate/faculty-of-engineering",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "The Faculty of Health Sciences and Tropical Medicine offers four four-year undergraduate programs: Bachelor of Public Health (epidemiology, biostatistics, health promotion, disease prevention), Bachelor of Nursing (medical-surgical, maternal and child, mental health, community nursing), Bachelor of Midwifery (antenatal, labor and delivery, postnatal, family planning), and Bachelor of Medical Laboratory Science (clinical microbiology, hematology, clinical chemistry, molecular diagnostics).",
+    "topic": "faculty_programs",
+    "faculty": "Health Sciences and Tropical Medicine",
+    "source_url": "https://snu.edu.so/academics/undergraduate/faculty-of-health-sciences-and-tropical-medicine",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "The Faculty of Languages offers Bachelor of Arabic Language (four years: language, literature, linguistics, grammar, translation) and Bachelor of Somali Language through the Department of African Languages (four years: Somali language, literature, linguistics, cultural heritage).",
+    "topic": "faculty_programs",
+    "faculty": "Languages",
+    "source_url": "https://snu.edu.so/academics/undergraduate/faculty-of-languages",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "The Faculty of Law offers two four-year undergraduate programs: Bachelor of Laws (LL.B.) covering constitutional, civil, criminal, commercial, and international law and human rights, and Bachelor of Law & Criminal Justice covering criminal law, criminology, criminal investigation, forensics, and policing.",
+    "topic": "faculty_programs",
+    "faculty": "Law",
+    "source_url": "https://snu.edu.so/academics/undergraduate/faculty-of-law",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "The Faculty of Medicine and Surgery offers a single program: Bachelor of Medicine and Bachelor of Surgery (MBBS), a six-year undergraduate program combining basic medical sciences, clinical disciplines, hospital rotations, and a compulsory one-year internship.",
+    "topic": "faculty_programs",
+    "faculty": "Medicine and Surgery",
+    "source_url": "https://snu.edu.so/academics/undergraduate/faculty-of-medicine-and-surgery",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "The Faculty of Sharia and Islamic Studies offers Bachelor of Sharia & Law (Islamic jurisprudence integrated with modern legal studies), Bachelor of Sharia Islamiah & Law (advanced Islamic law and contemporary legal systems), and Bachelor of Arabic Language, all four-year undergraduate programs.",
+    "topic": "faculty_programs",
+    "faculty": "Sharia and Islamic Studies",
+    "source_url": "https://snu.edu.so/academics/undergraduate/faculty-of-sharia-and-islamic-studies",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "The Faculty of Social Science offers Department of Journalism & Communication (re-established 2019: news writing, digital media, broadcasting, public relations) and Department of Political Science (established 2020: political systems, governance, public policy, international relations).",
+    "topic": "faculty_programs",
+    "faculty": "Social Science",
+    "source_url": "https://snu.edu.so/academics/undergraduate/faculty-of-social-science",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "The Faculty of Veterinary Medicine and Animal Husbandry, established 1973, offers Bachelor of Veterinary Medicine (BVM, five years: animal health, disease prevention and diagnosis, clinical training) and Bachelor of Animal Husbandry (BAH, four years: livestock production, animal nutrition, breeding, welfare).",
+    "topic": "faculty_programs",
+    "faculty": "Veterinary Medicine and Animal Husbandry",
+    "source_url": "https://snu.edu.so/academics/undergraduate/faculty-of-veterinary-medicine-and-animal-husbandry",
+    "confidence": "confirmed",
+    "last_checked": "2026-08-09"
+  },
+  {
+    "content": "The Faculty of Science's official page on snu.edu.so is currently unpublished with no listed departments or programs. Based on manually compiled information, the Faculty of Science offers five four-year undergraduate programs: Computer Science, Geology, Applied Chemistry, Marine Science, and Mathematics. This information is not from an official SNU source and should be treated as provisional; confirm exact curriculum details with the Faculty of Science directly.",
+    "topic": "faculty_programs",
+    "faculty": "Science",
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  },
+  {
+    "content": "Bachelor of Computer Science at SNU is a four-year program covering programming, software development, databases, computer networks, algorithms, and information systems, with practical project work. Graduates pursue careers in software development, IT, systems administration, and technology entrepreneurship.",
+    "topic": "faculty_programs",
+    "faculty": "Science",
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  },
+  {
+    "content": "Bachelor of Geology at SNU is a four-year program focused on the Earth's structure, minerals, rocks, and natural resources, with field surveying and geological mapping skills. Graduates work in resource exploration, environmental assessment, and geotechnical support.",
+    "topic": "faculty_programs",
+    "faculty": "Science",
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  },
+  {
+    "content": "Bachelor of Applied Chemistry at SNU is a four-year program covering chemical principles and lab techniques applied to industry, health, and environmental sectors, including organic, inorganic, and analytical chemistry. Graduates pursue careers in laboratories, manufacturing, and quality control.",
+    "topic": "faculty_programs",
+    "faculty": "Science",
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  },
+  {
+    "content": "Bachelor of Marine Science at SNU is a four-year program covering marine ecosystems, oceanography, and coastal resource management relevant to Somalia's coastline, including marine biology and sustainable resource use. Graduates pursue careers in fisheries, environmental management, and marine research.",
+    "topic": "faculty_programs",
+    "faculty": "Science",
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  },
+  {
+    "content": "Bachelor of Mathematics at SNU is a four-year program building foundations in pure and applied mathematics, including calculus, statistics, and mathematical modeling. Graduates pursue careers in education, data analysis, finance, and research.",
+    "topic": "faculty_programs",
+    "faculty": "Science",
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  },
+  {
+    "content": "SNU's admission exam is a single combined written exam covering English plus four scientific subjects: Biology, Chemistry, Physics, and Mathematics. Content is drawn from the Somali secondary school curriculum. Applicants whose faculty choice includes Sharia and Law are examined on a different set of subjects instead.",
+    "topic": "admission_exam",
+    "faculty": null,
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  },
+  {
+    "content": "The SNU admission exam is held after the application submission period closes, on a fixed date. Students do not choose their exam location themselves; they are assigned to one of three campuses: Shabelle Campus, Gaheyr Campus, or Km4 (Science & Technology Campus / Dugsiga Farsamada). There is no retake policy: a failing score is final for that admission cycle.",
+    "topic": "admission_exam",
+    "faculty": null,
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  },
+  {
+    "content": "SNU undergraduate faculties are split into two tiers for admission purposes. Tier 1 consists of exactly four faculties: Medicine and Surgery, Science, Engineering, and Economic and Management Science. Tier 2 includes all remaining faculties: Agriculture and Environmental Science, Education, Health Sciences and Tropical Medicine, Languages, Law, Sharia and Islamic Studies, Social Science, and Veterinary Medicine and Animal Husbandry.",
+    "topic": "faculty_tiers",
+    "faculty": null,
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  },
+  {
+    "content": "Applicants to SNU choose exactly three faculties, ranked first, second, and third choice, matching the faculty choice fields on the official application form. An applicant may select at most one Tier 1 faculty among their three choices. The other choices, or all three, can be Tier 2 faculties, but Tier 1 faculties cannot be selected more than once.",
+    "topic": "faculty_tiers",
+    "faculty": null,
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  },
+  {
+    "content": "Choosing a Tier 1 faculty at SNU does not change ongoing service fees; students pay the same service fees regardless of tier, every semester until graduation. Faculty-specific one-time administrative charges still apply per faculty as listed separately.",
+    "topic": "faculty_tiers",
+    "faculty": null,
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  },
+  {
+    "content": "SNU admission placement is based on the applicant's combined admission exam score. A score of 70% or above places the applicant into their first-choice faculty. A score between 50% and 70% places the applicant into their second or third choice faculty. A score below 50% results in the application being rejected, with no retake offered in that cycle. Everyone scoring 70% or above is placed into their first-choice faculty; this is not described as seat-limited.",
+    "topic": "placement_results",
+    "faculty": null,
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  },
+  {
+    "content": "SNU admission results are published once per cycle and checked by students on a separate results-checking website or portal, not through this chatbot. After passing, admitted students attend a welcoming event organized by faculty, roughly three faculties per day over one to two weeks, then pay their first semester service fee along with an enrollment fee.",
+    "topic": "placement_results",
+    "faculty": null,
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  }
+]

@@ -1,0 +1,42 @@
+[
+  {
+    "content": "To sit the SNU admission exam, applicants first pay a $30 exam fee upfront. This applies to all applicants regardless of faculty. This fee is separate from and paid before any other admission charges. Only after passing the exam do applicants pay the remaining one-time admission charges.",
+    "topic": "fees",
+    "faculty": null,
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  },
+  {
+    "content": "After passing the SNU admission exam, admitted students pay a one-time $50 ID/registration fee, plus their faculty's administrative charge (which varies by faculty, e.g. $50-$125 as listed in the Administrative Charges section), plus the $350 Foundation Programme / English for Academic Purposes (EAP) fee. These are paid together after passing, not before the exam. The $50 ID fee and $350 EAP fee apply to all faculties equally; only the administrative charge amount differs by faculty.",
+    "topic": "fees",
+    "faculty": null,
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  },
+  {
+    "content": "Once enrolled at SNU, students in every faculty pay an ongoing service fee of $125 per semester, for every semester until graduation. This applies regardless of faculty or tier and is separate from the one-time admission charges and the Foundation/EAP fee.",
+    "topic": "fees",
+    "faculty": null,
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  },
+  {
+    "content": "SNU students in every faculty must renew their student ID card every 2 years for a $10 fee. This is a recurring cost separate from the one-time $50 ID/registration fee paid at admission, and applies university-wide.",
+    "topic": "fees",
+    "faculty": null,
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  },
+  {
+    "content": "To estimate total cost for any SNU undergraduate program, combine: a $30 exam fee, a $50 ID/registration fee, the faculty's specific administrative charge ($50-$125 depending on faculty), the $350 Foundation/EAP program fee, $125 per semester multiplied by the number of semesters in the program (2 semesters per year of study), and $10 per ID renewal (one renewal roughly every 2 years of study). For example, a 4-year program (8 semesters) with a $125 administrative charge totals approximately $1,565; a 5-year program (10 semesters, e.g. Veterinary Medicine) or 6-year program (12 semesters, e.g. Medicine and Surgery) should be calculated using the same formula with the relevant faculty's administrative charge and number of semesters.",
+    "topic": "fees",
+    "faculty": null,
+    "source_url": null,
+    "confidence": "placeholder",
+    "last_checked": "2026-08-10"
+  }
+]
