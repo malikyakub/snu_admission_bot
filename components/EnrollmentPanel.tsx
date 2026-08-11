@@ -12,6 +12,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ChevronRight, Loader2, Paperclip, X } from "lucide-react";
+import { DatePartsInput } from "@/components/DatePartsInput";
+import { PhoneInput } from "@/components/PhoneInput";
 import {
   ALL_FACULTIES,
   allowedFaculties,
@@ -22,35 +24,13 @@ import {
 
 const TOTAL_STEPS = 13;
 
-const MONTHS = [
-  { value: "1", label: "Jan" },
-  { value: "2", label: "Feb" },
-  { value: "3", label: "Mar" },
-  { value: "4", label: "Apr" },
-  { value: "5", label: "May" },
-  { value: "6", label: "Jun" },
-  { value: "7", label: "Jul" },
-  { value: "8", label: "Aug" },
-  { value: "9", label: "Sep" },
-  { value: "10", label: "Oct" },
-  { value: "11", label: "Nov" },
-  { value: "12", label: "Dec" },
-] as const;
-
-const DOB_MAX_YEAR = new Date().getFullYear() - 15;
-const DOB_MIN_YEAR = 1980;
-const DOB_YEARS = Array.from(
-  { length: DOB_MAX_YEAR - DOB_MIN_YEAR + 1 },
-  (_, i) => String(DOB_MAX_YEAR - i)
-);
-
 /* ------------------------------------------------------------------ */
 /* Types                                                                 */
 /* ------------------------------------------------------------------ */
 
 type StepSubmitFn = (
   fields: Partial<EnrollmentData>,
-  label: string
+  _label?: string
 ) => Promise<void>;
 
 interface StepProps {
@@ -66,30 +46,6 @@ interface StepProps {
 function isValidPhone(v: string): boolean {
   const digits = v.replace(/\D/g, "");
   return digits.length >= 8 && digits.length <= 15;
-}
-
-function parseDobParts(iso: string): { day: string; month: string; year: string } {
-  if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
-    return { day: "", month: "", year: "" };
-  }
-  const [year, month, day] = iso.split("-");
-  return {
-    day: String(Number(day)),
-    month: String(Number(month)),
-    year,
-  };
-}
-
-function buildDob(day: string, month: string, year: string): string | null {
-  const d = Number(day);
-  const m = Number(month);
-  const y = Number(year);
-  if (!d || !m || !y || y < DOB_MIN_YEAR || y > DOB_MAX_YEAR) return null;
-  const dt = new Date(y, m - 1, d);
-  if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) {
-    return null;
-  }
-  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -181,7 +137,7 @@ function Step2({ data, onSubmit }: StepProps) {
 
   function handlePhone(v: string) {
     setPhone(v);
-    if (v && !isValidPhone(v)) setPhoneError("Enter a valid phone number (e.g. +252 61 234 5678)");
+    if (v && !isValidPhone(v)) setPhoneError("Enter a valid phone number (e.g. 61 234 5678)");
     else setPhoneError("");
   }
 
@@ -194,8 +150,12 @@ function Step2({ data, onSubmit }: StepProps) {
     }} loading={loading} valid={valid}>
       <div className="grid gap-1.5">
         <Label htmlFor="s2-phone">Phone number</Label>
-        <Input id="s2-phone" placeholder="+252 61 234 5678" value={phone}
-          onChange={e => handlePhone(e.target.value)} inputMode="tel" autoFocus />
+        <PhoneInput
+          id="s2-phone"
+          value={phone}
+          onChange={handlePhone}
+          autoFocus
+        />
         {phoneError && <p className="text-xs text-red-500">{phoneError}</p>}
         <p className="text-xs text-slate-500">
           Use the number from your application — it&apos;s how we look up your status later.
@@ -206,18 +166,11 @@ function Step2({ data, onSubmit }: StepProps) {
 }
 
 function Step3({ data, onSubmit }: StepProps) {
-  const initial = parseDobParts(data.date_of_birth ?? "");
   const [gender, setGender] = useState(data.gender ?? "");
-  const [day, setDay] = useState(initial.day);
-  const [month, setMonth] = useState(initial.month);
-  const [year, setYear] = useState(initial.year);
+  const [dob, setDob] = useState<string | null>(data.date_of_birth ?? null);
   const [placeOfBirth, setPlaceOfBirth] = useState(data.place_of_birth ?? "");
   const [loading, setLoading] = useState(false);
-  const dob = buildDob(day, month, year);
   const valid = !!gender && !!dob && placeOfBirth.trim().length >= 2;
-
-  const fieldClass =
-    "h-10 flex-1 min-w-0 border-0 bg-transparent px-2 text-center text-sm text-slate-800 outline-none focus:bg-sky-50/60 disabled:opacity-50";
 
   return (
     <StepShell step={3} title="Gender, date of birth & place of birth" onSubmit={async () => {
@@ -248,41 +201,7 @@ function Step3({ data, onSubmit }: StepProps) {
       </div>
       <div className="grid gap-1.5">
         <Label>Date of birth</Label>
-        <div className="flex w-full overflow-hidden rounded-lg border border-slate-200 bg-white divide-x divide-slate-200">
-          <select
-            aria-label="Day"
-            value={day}
-            onChange={(e) => setDay(e.target.value)}
-            className={fieldClass}
-          >
-            <option value="">Day</option>
-            {Array.from({ length: 31 }, (_, i) => String(i + 1)).map((d) => (
-              <option key={d} value={d}>{d.padStart(2, "0")}</option>
-            ))}
-          </select>
-          <select
-            aria-label="Month"
-            value={month}
-            onChange={(e) => setMonth(e.target.value)}
-            className={fieldClass}
-          >
-            <option value="">Month</option>
-            {MONTHS.map((m) => (
-              <option key={m.value} value={m.value}>{m.label}</option>
-            ))}
-          </select>
-          <select
-            aria-label="Year"
-            value={year}
-            onChange={(e) => setYear(e.target.value)}
-            className={`${fieldClass} flex-[1.2]`}
-          >
-            <option value="">Year</option>
-            {DOB_YEARS.map((y) => (
-              <option key={y} value={y}>{y}</option>
-            ))}
-          </select>
-        </div>
+        <DatePartsInput value={dob} onChange={setDob} />
       </div>
       <div className="grid gap-1.5">
         <Label htmlFor="s3-pob">Place of birth</Label>
@@ -569,8 +488,11 @@ function Step12({ data, onSubmit }: StepProps) {
       </div>
       <div className="grid gap-1.5">
         <Label htmlFor="s12-gmob">Guardian mobile</Label>
-        <Input id="s12-gmob" placeholder="+252 61 234 5678" value={guardianMobile}
-          onChange={e => setGuardianMobile(e.target.value)} inputMode="tel" />
+        <PhoneInput
+          id="s12-gmob"
+          value={guardianMobile}
+          onChange={setGuardianMobile}
+        />
       </div>
       <div className="grid gap-1.5">
         <Label htmlFor="s12-grel">Relation</Label>
@@ -698,15 +620,12 @@ export interface EnrollmentPanelProps {
   open: boolean;
   onClose: () => void;
   conversationId: string | null;
-  /** Called with the human-readable summary of each step to post in chat */
-  onStepMessage: (msg: string) => void;
 }
 
 export function EnrollmentPanel({
   open,
   onClose,
   conversationId,
-  onStepMessage,
 }: EnrollmentPanelProps) {
   const [enrollData, setEnrollData] = useState<EnrollmentData>({});
   const [currentStep, setCurrentStep] = useState(0); // 0-indexed
@@ -715,6 +634,7 @@ export function EnrollmentPanel({
   // Resume: load existing partial data on open
   useEffect(() => {
     if (!open || !conversationId) return;
+    setEnrollData((prev) => ({ ...prev, conversation_id: conversationId }));
     fetch("/api/enrollment", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -723,7 +643,10 @@ export function EnrollmentPanel({
       .then(r => r.json())
       .then(({ data: saved }) => {
         if (saved) {
-          setEnrollData(saved as EnrollmentData);
+          setEnrollData({
+            ...(saved as EnrollmentData),
+            conversation_id: conversationId,
+          });
           // Resume from saved step
           const savedStep = (saved.enrollment_step ?? 1) - 1;
           setCurrentStep(Math.max(0, Math.min(savedStep, STEPS.length - 1)));
@@ -733,7 +656,8 @@ export function EnrollmentPanel({
   }, [open, conversationId]);
 
   const handleStepSubmit: StepSubmitFn = useCallback(
-    async (fields, label) => {
+    async (fields) => {
+      // Accept either (fields) or legacy (fields, label) — never post to chat
       const nextStep = currentStep + 1;
       const merged: EnrollmentData = {
         ...enrollData,
@@ -743,7 +667,7 @@ export function EnrollmentPanel({
       };
       setEnrollData(merged);
 
-      // Persist to backend
+      // Persist to backend only — do not mirror answers into the chat transcript
       try {
         await fetch("/api/enrollment", {
           method: "POST",
@@ -754,16 +678,13 @@ export function EnrollmentPanel({
         // Non-fatal — local state is still updated
       }
 
-      // Post step summary as chat message
-      onStepMessage(label);
-
       if (nextStep >= STEPS.length) {
         setDone(true);
       } else {
         setCurrentStep(nextStep);
       }
     },
-    [currentStep, enrollData, conversationId, onStepMessage]
+    [currentStep, enrollData, conversationId]
   );
 
   if (!open) return null;

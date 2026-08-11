@@ -241,3 +241,20 @@ grant select, insert, update on public.conversations to anon, authenticated, ser
 grant select, insert         on public.messages      to anon, authenticated, service_role;
 grant select, insert, update on public.students      to anon, authenticated, service_role;
 grant select                 on public.kb_chunks     to anon, authenticated, service_role;
+
+
+-- ── 7. Storage buckets (enrollment documents) ───────────────
+-- Create these in Dashboard → Storage, OR run below (private).
+-- App uploads via service role: POST /api/enrollment/upload
+--
+--   enrollment-photos
+--   enrollment-ids
+--   enrollment-certificates
+--   enrollment-payments
+--
+-- Path layout: {conversation_id}/{timestamp}-{filename}
+
+
+
+-- Service role bypasses RLS; keep buckets private (no public anon policies).
+-- Optional: allow authenticated admins to read later via a policy on storage.objects.

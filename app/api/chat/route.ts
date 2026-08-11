@@ -23,17 +23,32 @@ import {
   isStatusCheckIntent,
   lastAssistantAskedForPhone,
   lastAssistantOfferedStartEnrollment,
+  lastAssistantStatusNotFound,
   startEnrollmentStubMessage,
   statusAskForPhoneMessage,
   statusNotFoundMessage,
 } from "@/lib/status";
 import {
-  enrollmentIntentReply,
-  isEnrollIntent,
+  enrollmentCtaMessage,
+  isEnrollInterest,
   resolveFacultyFromMessage,
+  withEnrollmentOffer,
 } from "@/lib/enrollment-intent";
-import { findStudentByPhone } from "@/lib/students";
-import { searchKbChunks, type KbChunkMatch } from "@/lib/supabase";
+import { ctaMarker } from "@/lib/cta";
+import {
+  findStudentByPhone,
+  linkStudentConversation,
+  normalizePhoneDigits,
+} from "@/lib/students";
+import {
+  isEnrollmentIncomplete,
+  nextIncompleteEnrollmentStep,
+} from "@/lib/enrollment";
+import { searchKbChunks, getSupabase, type KbChunkMatch } from "@/lib/supabase";
+import {
+  encodeSourcesHeader,
+  sourcesFromChunks,
+} from "@/lib/sources";
 import {
   saveAssistantWhenReady,
   saveMessageAsync,
@@ -267,25 +282,9 @@ export async function POST(req: Request) {
       });
     }
 
-    // --- Enrollment intent (before RAG) ---
-    if (isEnrollIntent(message)) {
-      const faculty = resolveFacultyFromMessage(message, null);
-      return jsonReply(conversation?.id ?? null, message, {
-        answer: enrollmentIntentReply(faculty),
-        conversation_id: conversation?.id ?? null,
-        needs_human: false,
-        handoff_offered: false,
-        low_confidence: false,
-        top_similarity: null,
-        intent: { ...EMPTY_INTENT, topic: "enrollment" },
-        sources: [],
-        flow: "enrollment",
-        open_enrollment: true,
-        suggested_faculty: faculty,
-      });
-    }
+    // Enrollment is offered via CTA after a normal answer — never auto-open here.
 
-    // --- Enrollment start stub (after "not found" offer) ---
+    // --- Enrollment start after status-not-found offer (yes / CTA follow-up text) ---
     if (
       lastAssistantOfferedStartEnrollment(history) &&
       isStartEnrollmentAffirmative(message)
@@ -299,21 +298,25 @@ export async function POST(req: Request) {
         top_similarity: null,
         intent: { ...EMPTY_INTENT, topic: "enrollment_start" },
         sources: [],
-        flow: "enrollment_start_stub",
+        flow: "enrollment_offer",
+        // Client opens only when user clicks the CTA — not automatically
+        open_enrollment: false,
       });
     }
 
-    // --- Phone lookup (status check follow-up) ---
+    // --- Phone lookup (status check follow-up / retry after not-found) ---
+    const phoneInMessage = extractPhoneNumber(message);
     const awaitingPhone =
       (conversation?.waiting_for_phone ?? false) ||
-      lastAssistantAskedForPhone(history);
+      lastAssistantAskedForPhone(history) ||
+      (lastAssistantStatusNotFound(history) && !!phoneInMessage);
 
     if (awaitingPhone) {
-      const phone = extractPhoneNumber(message);
+      const phone = phoneInMessage;
       if (!phone) {
         return jsonReply(conversation?.id ?? null, message, {
           answer:
-            "I still need the phone number from your application to look up your status. Please send it as digits (with country code if you have it).",
+            "I still need the phone number from your application. You can send it as `61…` or `+252 61…` — spaces are fine.",
           conversation_id: conversation?.id ?? null,
           needs_human: false,
           handoff_offered: false,
@@ -335,20 +338,43 @@ export async function POST(req: Request) {
       }
 
       try {
-        if (conversation) {
-          await setWaitingForPhone(conversation.id, false);
-          conversation = { ...conversation, waiting_for_phone: false };
-        }
-      } catch (err) {
-        console.warn(
-          "[/api/chat] clear waiting_for_phone:",
-          err instanceof Error ? err.message : err
-        );
-      }
-
-      try {
         const student = await findStudentByPhone(phone);
         if (student) {
+          // Stop waiting only when we found a match
+          try {
+            if (conversation) {
+              await setWaitingForPhone(conversation.id, false);
+              conversation = { ...conversation, waiting_for_phone: false };
+            }
+          } catch (err) {
+            console.warn(
+              "[/api/chat] clear waiting_for_phone:",
+              err instanceof Error ? err.message : err
+            );
+          }
+
+          // Link this chat so the enrollment panel can resume the same row
+          if (conversation?.id) {
+            try {
+              await linkStudentConversation(student.phone, conversation.id);
+              const resume =
+                nextIncompleteEnrollmentStep(student) ??
+                student.enrollment_step ??
+                1;
+              if (isEnrollmentIncomplete(student) && resume) {
+                await getSupabase()
+                  .from("students")
+                  .update({ enrollment_step: resume })
+                  .eq("phone", student.phone);
+              }
+            } catch (err) {
+              console.warn(
+                "[/api/chat] link student conversation:",
+                err instanceof Error ? err.message : err
+              );
+            }
+          }
+
           return jsonReply(conversation?.id ?? null, message, {
             answer: formatStudentStatus(student),
             conversation_id: conversation?.id ?? null,
@@ -359,15 +385,29 @@ export async function POST(req: Request) {
             intent: { ...EMPTY_INTENT, topic: "status_check" },
             sources: [],
             flow: "status_found",
+            resume_enrollment: isEnrollmentIncomplete(student),
             student: {
               phone: student.phone,
               enrollment_status: student.enrollment_status,
               current_step: student.current_step,
+              enrollment_step: nextIncompleteEnrollmentStep(student),
             },
           });
         }
 
-        // Not found — offer enrollment start only (no human handoff).
+        // Not found — keep waiting so they can retry another format
+        try {
+          if (conversation) {
+            await setWaitingForPhone(conversation.id, true);
+            conversation = { ...conversation, waiting_for_phone: true };
+          }
+        } catch (err) {
+          console.warn(
+            "[/api/chat] keep waiting_for_phone:",
+            err instanceof Error ? err.message : err
+          );
+        }
+
         return jsonReply(conversation?.id ?? null, message, {
           answer: statusNotFoundMessage(),
           conversation_id: conversation?.id ?? null,
@@ -378,6 +418,7 @@ export async function POST(req: Request) {
           intent: { ...EMPTY_INTENT, topic: "status_check" },
           sources: [],
           flow: "status_not_found",
+          looked_up: normalizePhoneDigits(phone),
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : "lookup failed";
@@ -589,11 +630,17 @@ export async function POST(req: Request) {
     saveMessageAsync(conversationId, "user", message);
 
     if (wantStream && groqRes.body) {
-      const withSuffix = lowConfidence
-        ? appendTextToSseStream(
-            groqRes.body,
-            "\n\nWould you like me to connect you with an admin?"
-          )
+      let suffix = "";
+      if (lowConfidence) {
+        suffix = `\n\n${ctaMarker("handoff", "Connect with an admin")}`;
+      } else if (isEnrollInterest(message)) {
+        const fac = resolveFacultyFromMessage(message, intent.faculty);
+        suffix = enrollmentCtaMessage(fac);
+      }
+
+      const sourceList = sourcesFromChunks(chunks);
+      const withSuffix = suffix
+        ? appendTextToSseStream(groqRes.body, suffix)
         : groqRes.body;
 
       const { stream: streamOut, textPromise } = tapSseStream(withSuffix);
@@ -610,6 +657,7 @@ export async function POST(req: Request) {
           "X-SNUBot-Chunks": String(chunks.length),
           "X-SNUBot-Low-Confidence": lowConfidence ? "1" : "0",
           "X-SNUBot-Handoff-Offered": handoffOfferedThisTurn ? "1" : "0",
+          "X-SNUBot-Sources": encodeSourcesHeader(sourceList),
           ...(conversationId
             ? { "X-SNUBot-Conversation-Id": conversationId }
             : {}),
@@ -623,7 +671,12 @@ export async function POST(req: Request) {
     let answer = completion.choices?.[0]?.message?.content ?? "";
     if (lowConfidence) {
       answer = appendHandoffOffer(answer);
+    } else if (isEnrollInterest(message)) {
+      const fac = resolveFacultyFromMessage(message, intent.faculty);
+      answer = withEnrollmentOffer(answer, fac);
     }
+
+    const sourceList = sourcesFromChunks(chunks);
 
     // User already queued above; only need assistant here (non-blocking)
     saveMessageAsync(conversationId, "assistant", answer);
@@ -636,7 +689,8 @@ export async function POST(req: Request) {
       low_confidence: lowConfidence,
       top_similarity: topSimilarity,
       intent,
-      sources: chunks.map((c) => ({
+      sources: sourceList,
+      chunks: chunks.map((c) => ({
         id: c.id,
         topic: c.topic,
         faculty: c.faculty,

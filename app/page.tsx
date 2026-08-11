@@ -16,20 +16,27 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { EnrollmentPanel } from "@/components/EnrollmentPanel";
+import { useToast } from "@/components/Toast";
+import { parseCtaContent, type CtaKind } from "@/lib/cta";
 import {
   enrollmentCtaMessage,
   enrollmentWelcomeMessage,
-  isEnrollAffirmative,
-  isEnrollIntent,
-  lastAssistantOfferedEnrollment,
   shouldOfferEnrollmentCta,
 } from "@/lib/enrollment-intent";
+import {
+  decodeSourcesHeader,
+  type ChatSource,
+} from "@/lib/sources";
 
 /* ------------------------------------------------------------------ */
 /* Types & localStorage helpers                                         */
 /* ------------------------------------------------------------------ */
 
-type ChatMessage = { role: "user" | "assistant"; content: string };
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+  sources?: ChatSource[];
+};
 
 type ConversationIndexEntry = {
   conversation_id: string;
@@ -64,16 +71,14 @@ function upsertIndex(entry: ConversationIndexEntry) {
 }
 
 /* ------------------------------------------------------------------ */
-/* 6 suggestion cards                                                   */
-/* ------------------------------------------------------------------ */
-
+/* Top 6 common admissions questions (from readiness battery) */
 const SUGGESTION_CARDS = [
-  "What faculties are available at SNU?",
-  "How do I apply for admission?",
-  "What subjects are on the entrance exam?",
-  "How much are the tuition fees?",
-  "What happens after I pass the exam?",
-  "Check my enrollment status",
+  "What documents do I need to submit for the online application?",
+  "What programs does the Faculty of Engineering offer?",
+  "What subjects are covered in the SNU admission exam?",
+  "Can I choose two Tier 1 faculties as my top choices?",
+  "What score do I need to get placed into my first-choice faculty?",
+  "How can I check my enrollment status?",
 ];
 
 /* ------------------------------------------------------------------ */
@@ -82,22 +87,132 @@ const SUGGESTION_CARDS = [
 
 function BotAvatar() {
   return (
-    <div className="shrink-0 w-8 h-8 rounded-full overflow-hidden border-2 border-sky-200 shadow-sm bg-white flex items-center justify-center">
-      <Image
-        src="/snu-logo.png"
-        alt="SNUBot"
-        width={20}
-        height={20}
-        className="object-contain w-[62%] h-[62%]"
-      />
+    <div className="w-8 h-8 rounded-full overflow-hidden border border-sky-200 bg-white flex items-center justify-center shrink-0 shadow-sm">
+      <Image src="/snu-logo.png" alt="SNUBot" width={20} height={20} className="object-contain w-[70%] h-[70%]" />
     </div>
   );
 }
 
 function UserAvatar() {
   return (
-    <div className="shrink-0 w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center shadow-sm">
+    <div className="w-8 h-8 rounded-full bg-sky-500 flex items-center justify-center shrink-0">
       <User className="w-4 h-4 text-white" />
+    </div>
+  );
+}
+
+/** Assistant body: flat text (no bubble) + clickable → CTAs + source badges */
+function AssistantBody({
+  content,
+  sources,
+  isTyping,
+  onCta,
+}: {
+  content: string;
+  sources?: ChatSource[];
+  isTyping?: boolean;
+  onCta: (kind: CtaKind) => void;
+}) {
+  if (isTyping) {
+    return (
+      <span className="text-xs text-slate-400 font-roboto italic">typing...</span>
+    );
+  }
+
+  const cleaned = content
+    .replace(
+      /\n*\s*For more information[^\n.]*(?:\.|$)/gi,
+      ""
+    )
+    .replace(/\n*\s*you can check\s+snu\.edu\.so[^\n.]*(?:\.|$)/gi, "")
+    .trim();
+
+  const parts = parseCtaContent(cleaned);
+  const uniqueSources = sources ?? [];
+
+  return (
+    <div className="font-roboto text-sm text-slate-800 space-y-3">
+      {parts.map((part, i) => {
+        if (part.type === "cta") {
+          return (
+            <div key={`cta-${i}`} className="pt-1">
+              <button
+                type="button"
+                onClick={() => onCta(part.kind)}
+                className="group inline-flex items-center gap-1.5 text-left text-sky-600 hover:text-sky-700 font-medium underline-offset-2 hover:underline transition-colors"
+              >
+                <ArrowRight className="w-4 h-4 shrink-0 transition-transform group-hover:translate-x-0.5" />
+                <span>{part.label}</span>
+              </button>
+            </div>
+          );
+        }
+        const text = part.value.trim();
+        if (!text) return null;
+        return (
+          <ReactMarkdown
+            key={`md-${i}`}
+            remarkPlugins={[remarkGfm]}
+            components={{
+              p: ({ node, ...p }) => (
+                <p className="mb-3 last:mb-0 leading-relaxed whitespace-pre-wrap" {...p} />
+              ),
+              ul: ({ node, ...p }) => (
+                <ul className="list-disc pl-5 space-y-1 mb-3 last:mb-0" {...p} />
+              ),
+              ol: ({ node, ...p }) => (
+                <ol className="list-decimal pl-5 space-y-1 mb-3 last:mb-0" {...p} />
+              ),
+              li: ({ node, ...p }) => <li className="leading-relaxed" {...p} />,
+              strong: ({ node, ...p }) => <strong className="font-semibold" {...p} />,
+              a: ({ node, href, children, ...p }) => (
+                <a
+                  className="text-sky-600 underline underline-offset-2"
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  {...p}
+                >
+                  {children}
+                </a>
+              ),
+            }}
+          >
+            {text}
+          </ReactMarkdown>
+        );
+      })}
+
+      {uniqueSources.length > 0 && (
+        <div className="pt-1">
+          <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            Sources
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {uniqueSources.map((s) => (
+              <a
+                key={s.url}
+                href={s.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white pl-1 pr-2.5 py-1 text-xs font-medium text-slate-700 shadow-sm hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 transition-colors"
+                title={s.url}
+              >
+                <span className="flex h-5 w-5 items-center justify-center overflow-hidden rounded-full border border-sky-100 bg-white">
+                  <Image
+                    src="/snu-logo.png"
+                    alt=""
+                    width={14}
+                    height={14}
+                    className="object-contain"
+                  />
+                </span>
+                <span className="max-w-[10rem] truncate">{s.label}</span>
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -119,7 +234,7 @@ function SidebarItem({
     <button
       type="button"
       onClick={onClick}
-      className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors font-playfair flex items-center gap-2 min-w-0 ${
+      className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors font-roboto flex items-center gap-2 min-w-0 ${
         active
           ? "bg-sky-50 text-sky-700 font-semibold"
           : "text-slate-600 hover:bg-gray-50"
@@ -137,6 +252,7 @@ function SidebarItem({
 
 export default function HomePage() {
   const router = useRouter();
+  const { toast } = useToast();
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -153,13 +269,15 @@ export default function HomePage() {
   const persistTimer      = useRef<number | null>(null);
   const inputRef          = useRef<HTMLInputElement | null>(null);
   const enrollCtaOffered  = useRef(false);
-  const enrollOpenTimer   = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    return () => {
-      if (enrollOpenTimer.current) clearTimeout(enrollOpenTimer.current);
-    };
-  }, []);
+  function notifyConnectedToAdmin() {
+    setAdminHandoff(true);
+    toast({
+      title: "Connected to Admin",
+      description: "Someone from the team will follow up shortly.",
+      variant: "success",
+    });
+  }
 
   /* read ?conversation= from URL on mount */
   useEffect(() => {
@@ -233,10 +351,11 @@ export default function HomePage() {
 
   async function streamResponse(
     res: Response
-  ): Promise<{ answer: string; openEnrollment?: boolean }> {
+  ): Promise<{ answer: string; connectedToAdmin?: boolean; sources?: ChatSource[] }> {
     const ct = res.headers.get("content-type") || "";
-    const hdr = res.headers.get("x-snubot-handoff-offered") ?? res.headers.get("X-SNUBot-Handoff-Offered");
-    if (hdr === "1") setAdminHandoff(true);
+    const sourcesHdr =
+      res.headers.get("x-snubot-sources") ?? res.headers.get("X-SNUBot-Sources");
+    const headerSources = decodeSourcesHeader(sourcesHdr);
 
     if (!res.ok) {
       const detail = await res.text().catch(() => `HTTP ${res.status}`);
@@ -247,10 +366,25 @@ export default function HomePage() {
 
     if (!ct.includes("text/event-stream")) {
       const json = await res.json();
-      if (json?.needs_human || json?.handoff_offered) setAdminHandoff(true);
+      const jsonSources: ChatSource[] = Array.isArray(json?.sources)
+        ? json.sources
+            .map((s: { url?: string; label?: string; source_url?: string }) => {
+              const url = s.url || s.source_url;
+              if (!url || typeof url !== "string") return null;
+              return {
+                url,
+                label:
+                  typeof s.label === "string" && s.label
+                    ? s.label
+                    : url.replace(/^https?:\/\/(www\.)?/, "").split("/")[0],
+              };
+            })
+            .filter(Boolean)
+        : headerSources;
       return {
         answer: (json?.answer as string | undefined) ?? "",
-        openEnrollment: json?.open_enrollment === true,
+        connectedToAdmin: json?.needs_human === true,
+        sources: jsonSources,
       };
     }
 
@@ -295,35 +429,79 @@ export default function HomePage() {
       reader.releaseLock();
     }
 
-    return { answer: assistantText };
+    return { answer: assistantText, sources: headerSources };
   }
 
   /* ---------------------------------------------------------------- */
   /* Send                                                               */
   /* ---------------------------------------------------------------- */
 
-  /** Called by EnrollmentPanel when a step is completed — post as user message */
-  const handleEnrollStepMessage = useCallback((msg: string) => {
-    setMessages(prev => [...prev, { role: "user", content: msg }]);
-  }, []);
-
-  function scheduleEnrollmentOpen() {
-    if (enrollOpenTimer.current) clearTimeout(enrollOpenTimer.current);
-    enrollOpenTimer.current = setTimeout(() => setEnrollOpen(true), 5000);
+  function startEnrollmentFromCta() {
+    setMessages((prev) => [
+      ...prev,
+      { role: "assistant", content: enrollmentWelcomeMessage() },
+    ]);
+    setEnrollOpen(true);
   }
 
-  function openEnrollmentPanel(userMsg: string, assistantReply?: string) {
-    setMessages(prev => [
-      ...prev,
-      { role: "user", content: userMsg },
-      {
-        role: "assistant",
-        content: assistantReply ?? enrollmentWelcomeMessage(),
-      },
-    ]);
-    setInputValue("");
-    // Let the student read the instructions before the form appears
-    scheduleEnrollmentOpen();
+  async function handleCta(kind: CtaKind) {
+    if (kind === "enroll") {
+      startEnrollmentFromCta();
+      return;
+    }
+    if (kind === "handoff") {
+      // Confirm handoff via API the same way as saying "yes"
+      if (!conversationId || pending) return;
+      setPending(true);
+      const history: ChatMessage[] = [
+        ...messages,
+        { role: "user", content: "Yes, connect me with an admin" },
+      ];
+      setMessages([...history, { role: "assistant", content: "" }]);
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: "Yes, connect me with an admin",
+            conversation_id: conversationId,
+            history,
+            stream: false,
+          }),
+        });
+        const { answer, connectedToAdmin } = await streamResponse(res);
+        if (connectedToAdmin || /connected you with an admin/i.test(answer)) {
+          notifyConnectedToAdmin();
+        } else {
+          setAdminHandoff(true);
+        }
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === "assistant") {
+            next[next.length - 1] = {
+              role: "assistant",
+              content: answer || "I've connected you with an admin.",
+            };
+          }
+          return next;
+        });
+      } catch {
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === "assistant") {
+            next[next.length - 1] = {
+              role: "assistant",
+              content: "Sorry — could not reach an admin right now. Please try again.",
+            };
+          }
+          return next;
+        });
+      } finally {
+        setPending(false);
+      }
+    }
   }
 
   async function handleSend(text?: string) {
@@ -331,19 +509,9 @@ export default function HomePage() {
     const msg = (text ?? inputValue).trim();
     if (!msg || pending) return;
 
-    // Direct enrollment intent OR affirmative after "Ready to enroll?" CTA
-    if (
-      isEnrollIntent(msg) ||
-      (lastAssistantOfferedEnrollment(messages) && isEnrollAffirmative(msg))
-    ) {
-      openEnrollmentPanel(msg);
-      return;
-    }
-
     setPending(true);
     setInputValue("");
     const history: ChatMessage[] = [...messages, { role: "user", content: msg }];
-    // Empty assistant bubble shows typing dots while waiting for the response
     setMessages([...history, { role: "assistant", content: "" }]);
 
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -359,16 +527,19 @@ export default function HomePage() {
         signal: controller.signal,
       });
 
-      let { answer, openEnrollment } = await streamResponse(res);
+      let { answer, connectedToAdmin, sources } = await streamResponse(res);
 
-      if (openEnrollment) {
-        scheduleEnrollmentOpen();
+      if (
+        connectedToAdmin ||
+        /connected you with an admin/i.test(answer || "")
+      ) {
+        notifyConnectedToAdmin();
       }
 
-      // After 3 consecutive faculty questions, offer enrollment CTA
+      // After 3 consecutive faculty questions, offer enrollment CTA (clickable)
       const userMsgs = history.filter((m) => m.role === "user").map((m) => m.content);
       const cta = shouldOfferEnrollmentCta(userMsgs, enrollCtaOffered.current);
-      if (cta && answer && !openEnrollment) {
+      if (cta && answer) {
         answer += enrollmentCtaMessage(cta.faculty);
         enrollCtaOffered.current = true;
       }
@@ -378,10 +549,21 @@ export default function HomePage() {
           const last = prev[prev.length - 1];
           if (last?.role === "assistant") {
             const next = [...prev];
-            next[next.length - 1] = { role: "assistant", content: answer };
+            next[next.length - 1] = {
+              role: "assistant",
+              content: answer,
+              sources: sources?.length ? sources : undefined,
+            };
             return next;
           }
-          return [...prev, { role: "assistant", content: answer }];
+          return [
+            ...prev,
+            {
+              role: "assistant",
+              content: answer,
+              sources: sources?.length ? sources : undefined,
+            },
+          ];
         });
       }
     } catch (err) {
@@ -465,7 +647,7 @@ export default function HomePage() {
           </div>
           <div className="min-w-0">
             <p className="font-bebas text-2xl leading-none text-slate-900 tracking-wide">SNUBOT</p>
-            <p className="text-[10px] text-slate-400 font-playfair leading-tight truncate">
+            <p className="text-[10px] text-slate-400 font-roboto leading-tight truncate">
               Somali National University
             </p>
           </div>
@@ -480,7 +662,7 @@ export default function HomePage() {
           <button
             type="button"
             onClick={startNewChat}
-            className="flex w-full items-center justify-center gap-2 rounded-full bg-sky-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-600 transition-colors font-playfair"
+            className="flex w-full items-center justify-center gap-2 rounded-full bg-sky-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-600 transition-colors font-roboto"
           >
             <Plus className="w-4 h-4" />
             New chat
@@ -489,11 +671,11 @@ export default function HomePage() {
 
         {/* ── Conversation list ── */}
         <div className="flex-1 overflow-y-auto px-3 py-1">
-          <p className="px-2 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-widest font-playfair">
+          <p className="px-2 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-widest font-roboto">
             Your conversations
           </p>
           {convList.length === 0 ? (
-            <p className="px-2 py-3 text-xs text-slate-400 font-playfair">No conversations yet.</p>
+            <p className="px-2 py-3 text-xs text-slate-400 font-roboto">No conversations yet.</p>
           ) : (
             <div className="flex flex-col gap-0.5">
               {convList.map((c) => (
@@ -513,7 +695,7 @@ export default function HomePage() {
           <button
             type="button"
             onClick={() => router.push("/login")}
-            className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700 font-playfair"
+            className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700 font-roboto"
           >
             <Settings className="w-4 h-4" />
             Admin login
@@ -545,10 +727,10 @@ export default function HomePage() {
                 <span className="font-bebas text-xl tracking-wide text-slate-800">SNUBOT</span>
               </div>
 
-              <h1 className="font-playfair text-3xl font-bold text-slate-900 mb-2">
+              <h1 className="font-roboto text-3xl font-bold text-slate-900 mb-2">
                 How can I help you today?
               </h1>
-              <p className="font-playfair text-sm text-slate-500 mb-8">
+              <p className="font-roboto text-sm text-slate-500 mb-8">
                 Ask about programs, admissions, fees, or enrollment at SNU.
               </p>
 
@@ -561,7 +743,7 @@ export default function HomePage() {
                     onClick={() => { setInputValue(label); inputRef.current?.focus(); }}
                     className="group flex items-center justify-between gap-3 rounded-xl bg-white border border-gray-200 px-4 py-4 text-left hover:border-sky-300 hover:shadow-sm transition-all"
                   >
-                    <span className="font-playfair text-sm text-slate-700">{label}</span>
+                    <span className="font-roboto text-sm text-slate-700">{label}</span>
                     <ArrowRight className="shrink-0 w-4 h-4 text-slate-400 group-hover:text-sky-500 transition-colors" />
                   </button>
                 ))}
@@ -571,7 +753,7 @@ export default function HomePage() {
             /* ── Chat messages ── */
             <div className="max-w-2xl mx-auto flex flex-col gap-5">
               {adminHandoff && (
-                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 font-playfair">
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 font-roboto">
                   This conversation has been passed to an admin.
                 </div>
               )}
@@ -586,44 +768,29 @@ export default function HomePage() {
                     key={`${idx}-${m.role}`}
                     className={`flex items-start gap-3 ${m.role === "user" ? "flex-row-reverse" : "flex-row"}`}
                   >
-                    {/* avatar */}
                     {m.role === "assistant" ? <BotAvatar /> : <UserAvatar />}
 
-                    <div className={`max-w-[78%] flex flex-col gap-1 ${m.role === "user" ? "items-end" : "items-start"}`}>
-                      {/* name label */}
-                      <span className="text-[11px] font-semibold text-slate-400 font-playfair px-1">
+                    <div
+                      className={`max-w-[85%] flex flex-col gap-1 ${
+                        m.role === "user" ? "items-end" : "items-start"
+                      }`}
+                    >
+                      <span className="text-[11px] font-semibold text-slate-400 font-roboto px-0.5">
                         {m.role === "assistant" ? "SNUBot" : "You"}
                       </span>
 
-                      {/* bubble */}
-                      <div
-                        className={`rounded-2xl px-4 py-3 text-sm ${
-                          m.role === "user"
-                            ? "bg-sky-500 text-white rounded-tr-sm"
-                            : "bg-white text-slate-900 shadow-sm border border-gray-100 rounded-tl-sm"
-                        }`}
-                      >
-                        {isTyping ? (
-                          <span className="text-xs text-slate-400 font-playfair italic">
-                            typing...
-                          </span>
-                        ) : m.role === "assistant" ? (
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              p:      ({ node, ...p }) => <p      className="mb-2 last:mb-0 leading-relaxed font-playfair" {...p} />,
-                              ul:     ({ node, ...p }) => <ul     className="list-disc pl-5 space-y-1 mb-2 last:mb-0" {...p} />,
-                              ol:     ({ node, ...p }) => <ol     className="list-decimal pl-5 space-y-1 mb-2 last:mb-0" {...p} />,
-                              li:     ({ node, ...p }) => <li     className="leading-relaxed font-playfair" {...p} />,
-                              strong: ({ node, ...p }) => <strong className="font-semibold" {...p} />,
-                            }}
-                          >
-                            {m.content}
-                          </ReactMarkdown>
-                        ) : (
-                          <span className="font-playfair">{m.content}</span>
-                        )}
-                      </div>
+                      {m.role === "user" ? (
+                        <div className="rounded-2xl rounded-tr-sm bg-sky-500 px-4 py-3 text-sm text-white">
+                          <span className="font-roboto">{m.content}</span>
+                        </div>
+                      ) : (
+                        <AssistantBody
+                          content={m.content}
+                          sources={m.sources}
+                          isTyping={isTyping}
+                          onCta={handleCta}
+                        />
+                      )}
                     </div>
                   </div>
                 );
@@ -641,7 +808,6 @@ export default function HomePage() {
               open={enrollOpen}
               onClose={() => setEnrollOpen(false)}
               conversationId={conversationId}
-              onStepMessage={handleEnrollStepMessage}
             />
 
             <form
@@ -652,7 +818,10 @@ export default function HomePage() {
               <button
                 type="button"
                 title="Start application"
-                onClick={() => setEnrollOpen(o => !o)}
+                onClick={() => {
+                  if (!enrollOpen) startEnrollmentFromCta();
+                  else setEnrollOpen(false);
+                }}
                 className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center transition-colors ${
                   enrollOpen
                     ? "bg-sky-100 text-sky-600"
@@ -665,7 +834,7 @@ export default function HomePage() {
 
               <input
                 ref={inputRef}
-                className="flex-1 bg-transparent text-sm text-slate-800 placeholder-slate-400 outline-none font-playfair"
+                className="flex-1 bg-transparent text-sm text-slate-800 placeholder-slate-400 outline-none font-roboto"
                 placeholder="What's in your mind..."
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}

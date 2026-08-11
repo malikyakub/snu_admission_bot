@@ -1,6 +1,10 @@
 import { detectIntent } from "./intent";
+import { appendEnrollCta, ctaMarker, hasCta } from "./cta";
 
-/** Broad enrollment / application intent — runs before RAG or chat API. */
+/**
+ * Strong “do it for me now” phrases — used only to append an enroll CTA,
+ * never to auto-open the form.
+ */
 const ENROLL_PATTERNS: RegExp[] = [
   /\b(enroll|enrol|enrollment)\b/i,
   /\b(sign\s*me\s*up|register\s*me)\b/i,
@@ -14,9 +18,13 @@ const ENROLL_PATTERNS: RegExp[] = [
   /\bapply\s+(now|for\s+admission)\b/i,
   /\badmit\s+me\b/i,
   /\b(take|put)\s+me\s+(in|into)\b/i,
+  /\bhow\s+(do|can|to)\s+i\s+apply\b/i,
+  /\bapplication\s+process\b/i,
+  /\bwant\s+to\s+apply\b/i,
 ];
 
-export function isEnrollIntent(message: string): boolean {
+/** True when the user is asking about applying / enrolling — offer a CTA. */
+export function isEnrollInterest(message: string): boolean {
   const t = message.trim();
   if (!t) return false;
   return ENROLL_PATTERNS.some((p) => {
@@ -25,26 +33,14 @@ export function isEnrollIntent(message: string): boolean {
   });
 }
 
-/** Short affirmative after an enrollment CTA ("Ready to enroll…?"). */
-export function isEnrollAffirmative(message: string): boolean {
-  const t = message.trim();
-  if (!t || t.length > 60) return false;
-  if (
-    /^(yes|yeah|yep|yup|sure|ok|okay|let'?s\s+go|go\s+ahead|please|absolutely|definitely|i'?m\s+ready)[!.?]*$/i.test(
-      t
-    )
-  ) {
-    return true;
-  }
-  return /\b(yes|yeah|let'?s\s+(do\s+it|enroll|apply|start)|sign\s+me\s+up|enroll\s+me)\b/i.test(
-    t
-  );
+/** @deprecated alias — interest only, does not open the panel */
+export function isEnrollIntent(message: string): boolean {
+  return isEnrollInterest(message);
 }
 
 const FOLLOW_UP =
   /\b(it|this|that|the program|the course|there|they|same|how long|how much|what about|tell me more|requirements?|fees?|tuition|duration|campus)\b/i;
 
-/** Resolve faculty from message, inheriting prior faculty on short follow-ups. */
 export function resolveFacultyFromMessage(
   message: string,
   priorFaculty: string | null
@@ -55,7 +51,6 @@ export function resolveFacultyFromMessage(
   return null;
 }
 
-/** Count consecutive user questions about the same faculty (oldest → newest). */
 export function getFacultyStreakAtEnd(
   userMessages: string[]
 ): { faculty: string; count: number } | null {
@@ -89,39 +84,41 @@ export function shouldOfferEnrollmentCta(
   return null;
 }
 
+/** Shown after the student clicks the enroll CTA / + button. */
 export function enrollmentWelcomeMessage(): string {
   return (
     "Great — I'll help you start your SNU application.\n\n" +
     "Please answer the following questions carefully and with **accurate information** " +
     "(your full name, phone, school details, faculty choices, and documents). " +
-    "This info is used for your official enrollment, so double-check before submitting.\n\n" +
-    "The application form will open in a few seconds…"
+    "This info is used for your official enrollment, so double-check before submitting."
   );
 }
 
-export function enrollmentCtaMessage(faculty: string): string {
-  return (
-    `\n\n---\n\nReady to enroll in **${faculty}**? ` +
-    `Say **yes** or tap the **+** button below to start your application.`
+export function enrollmentCtaMessage(faculty?: string | null): string {
+  const label = faculty
+    ? `Start application for ${faculty}`
+    : "Start your application";
+  return `\n\n${ctaMarker("enroll", label)}`;
+}
+
+/** Append enroll offer to a normal answer (no auto-open). */
+export function withEnrollmentOffer(
+  answer: string,
+  faculty?: string | null
+): string {
+  if (hasCta(answer, "enroll")) return answer.trim();
+  return appendEnrollCta(
+    answer,
+    faculty ? `Start application for ${faculty}` : undefined
   );
 }
 
-export function enrollmentIntentReply(faculty: string | null): string {
-  if (faculty) {
-    return (
-      `I'd be happy to help you apply for **${faculty}**! ` + enrollmentWelcomeMessage()
-    );
-  }
-  return enrollmentWelcomeMessage();
-}
-
-/** True if the last assistant message offered enrollment via the 3-question CTA. */
 export function lastAssistantOfferedEnrollment(
   history: { role: string; content: string }[]
 ): boolean {
   for (let i = history.length - 1; i >= 0; i--) {
     if (history[i].role === "assistant") {
-      return /Ready to enroll in/i.test(history[i].content);
+      return hasCta(history[i].content, "enroll") || /Ready to enroll/i.test(history[i].content);
     }
     if (history[i].role === "user") break;
   }

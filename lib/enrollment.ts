@@ -54,28 +54,50 @@ export type EnrollmentData = {
 export async function upsertEnrollment(data: EnrollmentData): Promise<void> {
   const supabase = getSupabase();
 
-  if (data.phone) {
+  // Prefer a consistent phone form for future lookups
+  const payload = { ...data };
+  if (payload.phone) {
+    const digits = payload.phone.replace(/\D/g, "");
+    let normalized = digits.startsWith("00") ? digits.slice(2) : digits;
+    if (normalized.startsWith("0") && normalized.length >= 9) {
+      normalized = `252${normalized.slice(1)}`;
+    } else if (normalized.length === 9 && normalized.startsWith("6")) {
+      normalized = `252${normalized}`;
+    }
+    if (normalized.startsWith("252") && normalized.length >= 12) {
+      const local = normalized.slice(3);
+      payload.phone = `+252 ${local}`;
+    }
+  }
+
+  // DB has both mother_name (legacy) and mothers_name (app) — keep them in sync
+  if (typeof payload.mothers_name === "string") {
+    (payload as EnrollmentData & { mother_name?: string }).mother_name =
+      payload.mothers_name;
+  }
+
+  if (payload.phone) {
     // Phone known — upsert on phone
     const { error } = await supabase
       .from("students")
-      .upsert({ ...data }, { onConflict: "phone", ignoreDuplicates: false });
+      .upsert({ ...payload }, { onConflict: "phone", ignoreDuplicates: false });
     if (error) throw new Error(`enrollment upsert failed: ${error.message}`);
-  } else if (data.conversation_id) {
+  } else if (payload.conversation_id) {
     // No phone yet — check if a row with this conversation_id exists
     const { data: existing } = await supabase
       .from("students")
       .select("phone")
-      .eq("conversation_id", data.conversation_id)
+      .eq("conversation_id", payload.conversation_id)
       .maybeSingle();
 
     if (existing) {
       const { error } = await supabase
         .from("students")
-        .update(data)
-        .eq("conversation_id", data.conversation_id);
+        .update(payload)
+        .eq("conversation_id", payload.conversation_id);
       if (error) throw new Error(`enrollment update failed: ${error.message}`);
     } else {
-      const { error } = await supabase.from("students").insert(data);
+      const { error } = await supabase.from("students").insert(payload);
       if (error) throw new Error(`enrollment insert failed: ${error.message}`);
     }
   }
@@ -93,6 +115,53 @@ export async function loadEnrollmentByConversation(
     .maybeSingle();
   if (error) throw new Error(`enrollment load failed: ${error.message}`);
   return data as EnrollmentData | null;
+}
+
+/** Ordered UI field groups → resume step (1-based). Campus/exam are admin-only (skipped). */
+const ENROLLMENT_FIELD_STEPS: { step: number; fields: (keyof EnrollmentData)[] }[] = [
+  { step: 1, fields: ["full_name", "mothers_name"] },
+  { step: 2, fields: ["phone"] },
+  { step: 3, fields: ["gender", "date_of_birth", "place_of_birth"] },
+  { step: 4, fields: ["national_id", "nationality"] },
+  { step: 5, fields: ["region", "address"] },
+  { step: 6, fields: ["school_name", "school_country", "school_region_city"] },
+  { step: 7, fields: ["certificate_type", "exam_roll_number", "certificate_number"] },
+  { step: 8, fields: ["faculty_choice_1"] },
+  { step: 9, fields: ["faculty_choice_2", "faculty_choice_3"] },
+  { step: 10, fields: ["guardian_name", "guardian_mobile", "guardian_relation"] },
+  {
+    step: 11,
+    fields: [
+      "doc_photo_url",
+      "doc_id_url",
+      "doc_certificate_url",
+      "doc_payment_url",
+    ],
+  },
+];
+
+function fieldFilled(data: EnrollmentData, key: keyof EnrollmentData): boolean {
+  const v = data[key];
+  if (v == null) return false;
+  if (typeof v === "string") return v.trim().length > 0;
+  if (typeof v === "number") return Number.isFinite(v) && v > 0;
+  if (typeof v === "boolean") return true;
+  return Boolean(v);
+}
+
+/** First incomplete step (1-based), or null if application looks complete. */
+export function nextIncompleteEnrollmentStep(
+  data: EnrollmentData
+): number | null {
+  for (const group of ENROLLMENT_FIELD_STEPS) {
+    const missing = group.fields.some((f) => !fieldFilled(data, f));
+    if (missing) return group.step;
+  }
+  return null;
+}
+
+export function isEnrollmentIncomplete(data: EnrollmentData): boolean {
+  return nextIncompleteEnrollmentStep(data) != null;
 }
 
 export const TIER_1_FACULTIES = [

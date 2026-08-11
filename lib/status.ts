@@ -1,5 +1,13 @@
 /** Greeting / small-talk detector — runs before RAG to avoid low-confidence handoff. */
 
+import { ctaMarker } from "./cta";
+import {
+  isEnrollmentIncomplete,
+  nextIncompleteEnrollmentStep,
+  type EnrollmentData,
+} from "./enrollment";
+import { normalizePhoneDigits } from "./students";
+
 const GREETING_PATTERNS: RegExp[] = [
   /^(hey|hi|hello|hiya|howdy|hola|salaam|salam|yo|sup|what'?s up|wassup)[!.,?]*$/i,
   /^(good\s?(morning|afternoon|evening|night|day))[!.,?]*$/i,
@@ -12,8 +20,9 @@ const GREETING_PATTERNS: RegExp[] = [
 
 export function isGreeting(message: string): boolean {
   const t = message.normalize("NFKC").trim();
-  // Only test short messages (≤ 40 chars) to avoid false-positives on real questions
   if (t.length > 40) return false;
+  // Don't treat phone replies as greetings
+  if (extractPhoneNumber(t)) return false;
   return GREETING_PATTERNS.some((p) => {
     p.lastIndex = 0;
     return p.test(t);
@@ -36,7 +45,9 @@ const ASK_FOR_PHONE =
   "Sure — I can look up your enrollment status. Please reply with the phone number you used on your application.";
 
 const START_ENROLLMENT_OFFER =
-  "I couldn't find an application under that phone number. Would you like to start the enrollment process?";
+  "I couldn't find an application under that phone number.\n\n" +
+  "You can try again with or without the country code (e.g. `61…` or `+252 61…`).\n\n" +
+  `[[cta:enroll|Start a new application]]`;
 
 export function isStatusCheckIntent(message: string): boolean {
   const t = message.normalize("NFKC").replace(/\s+/g, " ").trim();
@@ -46,23 +57,29 @@ export function isStatusCheckIntent(message: string): boolean {
   });
 }
 
-/** Extract a phone-like token from the message, or null if none. */
+/**
+ * Extract a phone-like token from free text.
+ * Handles: 613673734, +252613673734, +252 613673734, "what about +252…"
+ */
 export function extractPhoneNumber(message: string): string | null {
   const t = message.normalize("NFKC").trim();
-  // Prefer an explicit number-shaped token (allow spaces/dashes/parens).
-  const match = t.match(
-    /(?:\+|00)?[\d][\d\s\-().]{6,}\d/
-  );
+  if (!t) return null;
+
+  // Prefer explicit international / long digit runs in the text
+  const match = t.match(/(?:\+|00)?[\d][\d\s\-().]{6,}\d/);
   if (match) {
-    const digits = match[0].replace(/\D/g, "");
-    if (digits.length >= 7) return match[0].trim();
+    const digits = normalizePhoneDigits(match[0]);
+    if (digits.length >= 9 && digits.length <= 15) {
+      return match[0].trim();
+    }
   }
 
-  // Whole message is mostly digits (common after we asked for the number).
+  // Whole message is mostly a number
   const digitsOnly = t.replace(/\D/g, "");
   if (digitsOnly.length >= 7 && digitsOnly.length <= 15) {
-    const nonDigitRatio = (t.length - digitsOnly.length) / Math.max(t.length, 1);
-    if (nonDigitRatio <= 0.35) return t;
+    const nonDigitRatio =
+      (t.length - digitsOnly.length) / Math.max(t.length, 1);
+    if (nonDigitRatio <= 0.5) return t.trim();
   }
 
   return null;
@@ -73,10 +90,24 @@ export function lastAssistantAskedForPhone(
 ): boolean {
   for (let i = history.length - 1; i >= 0; i--) {
     if (history[i].role === "assistant") {
-      return /phone number you used on your application/i.test(
+      return /phone number you used on your application|try again with or without the country code/i.test(
         history[i].content
       );
     }
+  }
+  return false;
+}
+
+export function lastAssistantStatusNotFound(
+  history: { role: string; content: string }[]
+): boolean {
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role === "assistant") {
+      return /couldn't find an application under that phone number/i.test(
+        history[i].content
+      );
+    }
+    if (history[i].role === "user") break;
   }
   return false;
 }
@@ -85,17 +116,70 @@ export function statusAskForPhoneMessage(): string {
   return ASK_FOR_PHONE;
 }
 
-export function formatStudentStatus(student: {
-  full_name: string | null;
-  enrollment_status: string | null;
-  current_step: string | null;
-  phone: string;
-}): string {
-  const name = student.full_name?.trim() || "there";
-  const status = student.enrollment_status?.trim() || "unknown";
-  const step = student.current_step?.trim();
+/** Human-readable enrollment status for chat replies. */
+export function formatEnrollmentStatusLabel(raw: string | null | undefined): string {
+  const key = (raw ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!key) return "In progress";
 
-  const statusLine = `Hi ${name}, your enrollment status is currently "${status}".`;
+  const labels: Record<string, string> = {
+    pending_review: "Under review",
+    under_review: "Under review",
+    in_review: "Under review",
+    in_progress: "In progress",
+    draft: "In progress",
+    started: "In progress",
+    incomplete: "In progress",
+    submitted: "Submitted",
+    approved: "Approved",
+    accepted: "Accepted",
+    rejected: "Rejected",
+    declined: "Declined",
+    waitlisted: "Waitlisted",
+    enrolled: "Enrolled",
+    registered: "Registered",
+    withdrawn: "Withdrawn",
+    cancelled: "Cancelled",
+    canceled: "Cancelled",
+  };
+
+  if (labels[key]) return labels[key];
+
+  // Fallback: pending_review → Pending review
+  return key
+    .split("_")
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+export function formatStudentStatus(
+  student: {
+    full_name: string | null;
+    enrollment_status: string | null;
+    current_step: string | null;
+    phone: string;
+    enrollment_step?: number | null;
+  } & Partial<EnrollmentData>
+): string {
+  const name = student.full_name?.trim() || "there";
+  const status = formatEnrollmentStatusLabel(student.enrollment_status);
+  const incomplete = isEnrollmentIncomplete(student);
+  const resumeStep =
+    nextIncompleteEnrollmentStep(student) ??
+    (student.enrollment_step && student.enrollment_step > 0
+      ? student.enrollment_step
+      : null);
+
+  if (incomplete && resumeStep) {
+    return (
+      `Hi ${name}, I found your application (status: **${status}**).\n\n` +
+      `Some details are still missing — you can continue from step ${resumeStep}.\n\n` +
+      ctaMarker("enroll", "Continue your application")
+    );
+  }
+
+  const statusLine = `Hi ${name}, your enrollment status is currently **${status}**.`;
+  const step = student.current_step?.trim();
   if (step) {
     return `${statusLine} You're on this step: ${step}.`;
   }
@@ -114,6 +198,7 @@ export function isStartEnrollmentAffirmative(message: string): boolean {
     .trim()
     .toLowerCase();
   if (!t) return false;
+  if (extractPhoneNumber(t)) return false;
   if (
     /^(y|yes|yeah|yep|yup|sure|ok|okay|please|alright|go ahead|do it|start)([.!?\s]|$)/i.test(
       t
@@ -121,7 +206,7 @@ export function isStartEnrollmentAffirmative(message: string): boolean {
   ) {
     return true;
   }
-  return /\b(start (the )?enrollment|begin (the )?enrollment|enroll( me)?|sign ?up)\b/i.test(
+  return /\b(start (the )?enrollment|begin (the )?enrollment|enroll( me)?|sign ?up|continue (my |the )?application)\b/i.test(
     t
   );
 }
@@ -131,15 +216,19 @@ export function lastAssistantOfferedStartEnrollment(
 ): boolean {
   for (let i = history.length - 1; i >= 0; i--) {
     if (history[i].role === "assistant") {
-      return /start the enrollment process/i.test(history[i].content);
+      return (
+        /\[\[cta:enroll/i.test(history[i].content) ||
+        /start the enrollment process/i.test(history[i].content)
+      );
     }
+    if (history[i].role === "user") break;
   }
   return false;
 }
 
 export function startEnrollmentStubMessage(): string {
   return (
-    "Great — enrollment signup through this chat isn't fully available yet. " +
-    "For now, please continue on the official portal: https://student.snu.edu.so/admission/home"
+    "You can start your application right here.\n\n" +
+    ctaMarker("enroll", "Start your application")
   );
 }

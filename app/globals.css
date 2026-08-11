@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Roboto:ital,wght@0,100..900;1,100..900&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -12,7 +12,7 @@ body,
 
 body {
   @apply bg-gray-100 text-slate-900;
-  font-family: 'Playfair Display', Georgia, serif;
+  font-family: 'Roboto', system-ui, sans-serif;
 }
 
 .font-bebas {
@@ -22,6 +22,10 @@ body {
 
 .font-playfair {
   font-family: 'Playfair Display', Georgia, serif;
+}
+
+.font-roboto {
+  font-family: 'Roboto', system-ui, sans-serif;
 }
 
 /* Typing indicator dots */
@@ -116,4 +120,12 @@ body {
   * {
     border-color: oklch(0.922 0 0);
   }
+}
+
+/* Solid overlays — shadcn tokens alone can render transparent if not mapped */
+[data-slot="select-content"],
+[data-slot="popover-content"],
+[data-slot="sheet-content"] {
+  background-color: #ffffff !important;
+  color: #1e293b;
 }

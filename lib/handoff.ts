@@ -1,14 +1,13 @@
 /** Low-confidence retrieval → offer human admin handoff. */
 
+import { appendHandoffCta, hasCta } from "./cta";
+
 export const HANDOFF_SIMILARITY_THRESHOLD = Number(
   process.env.HANDOFF_SIMILARITY_THRESHOLD || 0.55
 );
 
 export const HANDOFF_OFFER =
-  "I don't have that information. Would you like me to connect you with an admin?";
-
-const HANDOFF_OFFER_SHORT =
-  "Would you like me to connect you with an admin?";
+  "I don't have that information.\n\n[[cta:handoff|Connect with an admin]]";
 
 const HANDOFF_CONFIRM =
   "I've connected you with an admin. Someone from the team will follow up with you shortly.";
@@ -52,25 +51,20 @@ export function lastAssistantOfferedHandoff(
   for (let i = history.length - 1; i >= 0; i--) {
     const m = history[i];
     if (m.role === "assistant") {
-      return /connect you with an admin/i.test(m.content);
+      return (
+        hasCta(m.content, "handoff") ||
+        /connect you with an admin|Connect with an admin/i.test(m.content)
+      );
     }
   }
   return false;
 }
 
 /**
- * Append the handoff offer without duplicating phrases the model already used.
+ * Append the handoff offer as a clickable CTA (no duplicate).
  */
 export function appendHandoffOffer(answer: string): string {
-  const trimmed = (answer || "").trim();
-  if (/connect you with an admin/i.test(trimmed)) {
-    return trimmed;
-  }
-  if (/don'?t have (that|this|the) information/i.test(trimmed)) {
-    return `${trimmed}\n\n${HANDOFF_OFFER_SHORT}`;
-  }
-  if (!trimmed) return HANDOFF_OFFER;
-  return `${trimmed}\n\n${HANDOFF_OFFER}`;
+  return appendHandoffCta(answer, "Connect with an admin");
 }
 
 export function handoffConfirmMessage(): string {
