@@ -90,7 +90,7 @@ async function checkOllama() {
   if (error) {
     console.error("match_kb_chunks RPC error:", error.message);
     console.error(
-      "If missing/wrong signature, re-run supabase/match_kb_chunks.sql (id uuid)."
+      "If missing/wrong signature, re-run supabase/schema.sql (id uuid)."
     );
     process.exit(1);
   }

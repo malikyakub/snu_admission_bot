@@ -13,11 +13,12 @@ import {
   isLowConfidence,
   lastAssistantOfferedHandoff,
 } from "@/lib/handoff";
-import { detectIntent } from "@/lib/intent";
+import { detectIntent, detectIntentWithHistory } from "@/lib/intent";
 import { buildMessages, type ChatHistoryMessage } from "@/lib/prompt";
 import {
   extractPhoneNumber,
   formatStudentStatus,
+  isGreeting,
   isStartEnrollmentAffirmative,
   isStatusCheckIntent,
   lastAssistantAskedForPhone,
@@ -26,8 +27,18 @@ import {
   statusAskForPhoneMessage,
   statusNotFoundMessage,
 } from "@/lib/status";
+import {
+  enrollmentIntentReply,
+  isEnrollIntent,
+  resolveFacultyFromMessage,
+} from "@/lib/enrollment-intent";
 import { findStudentByPhone } from "@/lib/students";
 import { searchKbChunks, type KbChunkMatch } from "@/lib/supabase";
+import {
+  saveAssistantWhenReady,
+  saveMessageAsync,
+  saveTurnAsync,
+} from "@/lib/messages";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -144,6 +155,66 @@ function mergeChunksBySimilarity(
     .slice(0, limit);
 }
 
+/** Tee an SSE stream: forward bytes to the client while accumulating assistant text. */
+function tapSseStream(
+  upstream: ReadableStream<Uint8Array>
+): { stream: ReadableStream<Uint8Array>; textPromise: Promise<string> } {
+  const decoder = new TextDecoder();
+  let resolveText!: (t: string) => void;
+  const textPromise = new Promise<string>((r) => {
+    resolveText = r;
+  });
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const reader = upstream.getReader();
+      let buffer = "";
+      let assistantText = "";
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) controller.enqueue(value);
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n");
+          buffer = parts.pop() ?? "";
+          for (const line of parts) {
+            const t = line.trim();
+            if (!t.startsWith("data:")) continue;
+            const payload = t.slice(5).trim();
+            if (!payload || payload === "[DONE]") continue;
+            try {
+              const d = JSON.parse(payload)?.choices?.[0]?.delta?.content;
+              if (typeof d === "string" && d) assistantText += d;
+            } catch {
+              /* skip malformed */
+            }
+          }
+        }
+      } catch (err) {
+        controller.error(err);
+        resolveText(assistantText);
+        return;
+      }
+      controller.close();
+      resolveText(assistantText);
+    },
+  });
+
+  return { stream, textPromise };
+}
+
+/** JSON reply helper — fires message persistence without awaiting it. */
+function jsonReply(
+  conversationId: string | null,
+  userMessage: string,
+  payload: Record<string, unknown>
+) {
+  const answer = typeof payload.answer === "string" ? payload.answer : "";
+  saveTurnAsync(conversationId, userMessage, answer);
+  return Response.json(payload);
+}
+
 export async function POST(req: Request) {
   let body: ChatBody;
   try {
@@ -180,12 +251,46 @@ export async function POST(req: Request) {
       console.warn("[/api/chat] conversation load:", conversationError);
     }
 
+    // --- Greeting / small-talk shortcut (before RAG) ---
+    if (isGreeting(message)) {
+      return jsonReply(conversation?.id ?? null, message, {
+        answer:
+          "Hey! I'm here to help with SNU admissions — ask me about faculties, requirements, fees, the entrance exam, or check your enrollment status.",
+        conversation_id: conversation?.id ?? null,
+        needs_human: false,
+        handoff_offered: false,
+        low_confidence: false,
+        top_similarity: null,
+        intent: { ...EMPTY_INTENT, topic: "greeting" },
+        sources: [],
+        flow: "greeting",
+      });
+    }
+
+    // --- Enrollment intent (before RAG) ---
+    if (isEnrollIntent(message)) {
+      const faculty = resolveFacultyFromMessage(message, null);
+      return jsonReply(conversation?.id ?? null, message, {
+        answer: enrollmentIntentReply(faculty),
+        conversation_id: conversation?.id ?? null,
+        needs_human: false,
+        handoff_offered: false,
+        low_confidence: false,
+        top_similarity: null,
+        intent: { ...EMPTY_INTENT, topic: "enrollment" },
+        sources: [],
+        flow: "enrollment",
+        open_enrollment: true,
+        suggested_faculty: faculty,
+      });
+    }
+
     // --- Enrollment start stub (after "not found" offer) ---
     if (
       lastAssistantOfferedStartEnrollment(history) &&
       isStartEnrollmentAffirmative(message)
     ) {
-      return Response.json({
+      return jsonReply(conversation?.id ?? null, message, {
         answer: startEnrollmentStubMessage(),
         conversation_id: conversation?.id ?? null,
         needs_human: false,
@@ -206,7 +311,7 @@ export async function POST(req: Request) {
     if (awaitingPhone) {
       const phone = extractPhoneNumber(message);
       if (!phone) {
-        return Response.json({
+        return jsonReply(conversation?.id ?? null, message, {
           answer:
             "I still need the phone number from your application to look up your status. Please send it as digits (with country code if you have it).",
           conversation_id: conversation?.id ?? null,
@@ -244,7 +349,7 @@ export async function POST(req: Request) {
       try {
         const student = await findStudentByPhone(phone);
         if (student) {
-          return Response.json({
+          return jsonReply(conversation?.id ?? null, message, {
             answer: formatStudentStatus(student),
             conversation_id: conversation?.id ?? null,
             needs_human: false,
@@ -263,7 +368,7 @@ export async function POST(req: Request) {
         }
 
         // Not found — offer enrollment start only (no human handoff).
-        return Response.json({
+        return jsonReply(conversation?.id ?? null, message, {
           answer: statusNotFoundMessage(),
           conversation_id: conversation?.id ?? null,
           needs_human: false,
@@ -303,7 +408,7 @@ export async function POST(req: Request) {
         }
       }
 
-      return Response.json({
+      return jsonReply(conversation?.id ?? null, message, {
         answer: statusAskForPhoneMessage(),
         conversation_id: conversation?.id ?? null,
         needs_human: false,
@@ -316,7 +421,7 @@ export async function POST(req: Request) {
         ...(conversationError
           ? {
               warning:
-                "Could not persist waiting_for_phone. Run supabase/conversations_waiting_for_phone.sql.",
+                "Could not persist waiting_for_phone. Run supabase/schema.sql.",
               conversation_error: conversationError,
             }
           : {}),
@@ -348,7 +453,7 @@ export async function POST(req: Request) {
         console.warn("[/api/chat] needs_human:", conversationError);
       }
 
-      return Response.json({
+      return jsonReply(conversation?.id ?? null, message, {
         answer: handoffConfirmMessage(),
         conversation_id: conversation?.id ?? null,
         needs_human: persisted,
@@ -360,7 +465,7 @@ export async function POST(req: Request) {
         ...(conversationError
           ? {
               warning:
-                "Could not persist needs_human. Run supabase/conversations.sql in Supabase, then retry.",
+                "Could not persist needs_human. Run supabase/schema.sql in Supabase, then retry.",
               conversation_error: conversationError,
             }
           : {}),
@@ -368,8 +473,12 @@ export async function POST(req: Request) {
     }
 
     // --- RAG path ---
-    const embedding = await embedQuery(message);
-    const intent = detectIntent(message);
+    const intent = detectIntentWithHistory(message, history);
+    const embedMessage =
+      intent.faculty && !detectIntent(message).faculty
+        ? `${message} ${intent.faculty} fees tuition`
+        : message;
+    const embedding = await embedQuery(embedMessage);
 
     let chunks: KbChunkMatch[] = [];
 
@@ -430,8 +539,11 @@ export async function POST(req: Request) {
 
     const messages = buildMessages(message, chunks, history, {
       lowConfidence,
+      annualFee: intent.annualFee,
+      contextFaculty: intent.faculty,
     });
 
+    const groqSignal = AbortSignal.timeout(18_000); // 18 s — below Vercel's 30 s limit
     const groqRes = await fetch(GROQ_URL, {
       method: "POST",
       headers: {
@@ -445,6 +557,7 @@ export async function POST(req: Request) {
         max_tokens: 1024,
         stream: wantStream,
       }),
+      signal: groqSignal,
     });
 
     if (!groqRes.ok) {
@@ -472,13 +585,20 @@ export async function POST(req: Request) {
 
     const conversationId = conversation?.id ?? null;
 
+    // Persist user message immediately (non-blocking) for all RAG replies
+    saveMessageAsync(conversationId, "user", message);
+
     if (wantStream && groqRes.body) {
-      const streamOut = lowConfidence
+      const withSuffix = lowConfidence
         ? appendTextToSseStream(
             groqRes.body,
             "\n\nWould you like me to connect you with an admin?"
           )
         : groqRes.body;
+
+      const { stream: streamOut, textPromise } = tapSseStream(withSuffix);
+      // Assistant row lands after stream finishes — still non-blocking for TTFB
+      saveAssistantWhenReady(conversationId, textPromise);
 
       return new Response(streamOut, {
         headers: {
@@ -505,6 +625,9 @@ export async function POST(req: Request) {
       answer = appendHandoffOffer(answer);
     }
 
+    // User already queued above; only need assistant here (non-blocking)
+    saveMessageAsync(conversationId, "assistant", answer);
+
     return Response.json({
       answer,
       conversation_id: conversationId,
@@ -524,7 +647,7 @@ export async function POST(req: Request) {
       ...(conversationError
         ? {
             warning:
-              "Could not persist conversation handoff state. Run supabase/conversations.sql in Supabase.",
+              "Could not persist conversation handoff state. Run supabase/schema.sql in Supabase.",
             conversation_error: conversationError,
           }
         : {}),

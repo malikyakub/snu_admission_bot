@@ -81,6 +81,7 @@ const TOPICS: TopicEntry[] = [
       /\bprice\b/i,
       /\bbudget\b/i,
       /\badministrative\b/i,
+      /\b(yearly|annual|per\s+year|each\s+year|every\s+year)\b/i,
       /\$\d+/,
     ],
   },
@@ -254,6 +255,8 @@ export type ChatIntent = {
    * When true, merge placement_results + admission_exam (post-exam next steps).
    */
   combineExamAndPlacement: boolean;
+  /** User asked about yearly / annual recurring cost. */
+  annualFee?: boolean;
 };
 
 /** Explicit cost/fee language — used to override competing topic matches. */
@@ -270,6 +273,7 @@ const FEE_COST_SIGNALS: RegExp[] = [
   /\btotals?\b/i,
   /\bprice\b/i,
   /\bbudget\b/i,
+  /\b(yearly|annual|per\s+year|each\s+year|every\s+year)\b/i,
   /\$\d+/,
 ];
 
@@ -333,6 +337,79 @@ function bestMatch<T extends string>(
   return best;
 }
 
+/**
+ * Department → parent faculty map.
+ * Each entry is [regex, faculty name]. Ordered most-specific first.
+ * Used as a fallback when no direct faculty keyword is matched.
+ */
+const DEPT_TO_FACULTY: [RegExp, string][] = [
+  // Science
+  [/\bcomputer\s+science\b/i,                        "Science"],
+  [/\bgeology\b/i,                                   "Science"],
+  [/\bapplied\s+chemistry\b/i,                       "Science"],
+  [/\bmarine\s+science\b/i,                          "Science"],
+  [/\bmathematics\b/i,                               "Science"],
+  // Engineering (departments match the degree names)
+  [/\bcivil\s+engineer/i,                            "Engineering"],
+  [/\bmechanical\s+engineer/i,                       "Engineering"],
+  [/\belectrical\s+engineer/i,                       "Engineering"],
+  [/\barchitectur(?:al|e)\s+engineer/i,              "Engineering"],
+  // Economic and Management Science
+  [/\beconomics?\b/i,                                "Economic and Management Science"],
+  [/\bbusiness\s+management\b/i,                     "Economic and Management Science"],
+  [/\baccounting\b/i,                                "Economic and Management Science"],
+  [/\bfinance\b/i,                                   "Economic and Management Science"],
+  [/\bstatistics\b/i,                                "Economic and Management Science"],
+  [/\bplanning\b/i,                                  "Economic and Management Science"],
+  [/\bentrepreneur/i,                                "Economic and Management Science"],
+  [/\bmarketing\b/i,                                 "Economic and Management Science"],
+  // Health Sciences and Tropical Medicine
+  [/\bpublic\s+health\b/i,                           "Health Sciences and Tropical Medicine"],
+  [/\bnursing\b/i,                                   "Health Sciences and Tropical Medicine"],
+  [/\bmidwifery\b/i,                                 "Health Sciences and Tropical Medicine"],
+  [/\bmedical\s+lab(?:oratory)?\s+science\b/i,       "Health Sciences and Tropical Medicine"],
+  [/\bmedical\s+lab\b/i,                             "Health Sciences and Tropical Medicine"],
+  [/\bepidemiolog/i,                                 "Health Sciences and Tropical Medicine"],
+  // Agriculture and Environmental Science
+  [/\bagricultural\s+science\b/i,                    "Agriculture and Environmental Science"],
+  [/\bgeneral\s+agriculture\b/i,                     "Agriculture and Environmental Science"],
+  [/\bplant\s+protection\b/i,                        "Agriculture and Environmental Science"],
+  [/\benvironmental\s+science\b/i,                   "Agriculture and Environmental Science"],
+  [/\bcrop\s+production\b/i,                         "Agriculture and Environmental Science"],
+  // Education (specific subjects taught as B.Ed)
+  [/\bbachelor\s+of\s+education\b/i,                 "Education"],
+  [/\beducation\s+in\s+\w/i,                         "Education"],
+  // Languages
+  [/\barabic\s+language\b/i,                         "Languages"],
+  [/\bsomali\s+language\b/i,                         "Languages"],
+  [/\bafrican\s+lang/i,                              "Languages"],
+  // Law (departments within)
+  [/\bll\.?b\b/i,                                    "Law"],
+  [/\bshari[a'']a\s+(?:and\s+)?law\b/i,              "Sharia and Islamic Studies"],
+  [/\bislamic\s+jurisprudence\b/i,                   "Sharia and Islamic Studies"],
+  [/\bislamic\s+law\b/i,                             "Sharia and Islamic Studies"],
+  // Medicine and Surgery
+  [/\bmbbs\b/i,                                      "Medicine and Surgery"],
+  [/\bmedicine\s+and\s+surgery\b/i,                  "Medicine and Surgery"],
+  // Social Science
+  [/\bjournalism\b/i,                                "Social Science"],
+  [/\bcommunication\b/i,                             "Social Science"],
+  [/\bpolitical\s+science\b/i,                       "Social Science"],
+  // Veterinary Medicine and Animal Husbandry
+  [/\bbvm\b/i,                                       "Veterinary Medicine and Animal Husbandry"],
+  [/\bveterinary\s+medicine\b/i,                     "Veterinary Medicine and Animal Husbandry"],
+  [/\banimal\s+(?:science|production|health)\b/i,    "Veterinary Medicine and Animal Husbandry"],
+];
+
+/** Resolve a department name in the message to its parent faculty, or null. */
+function resolveDepartmentToFaculty(text: string): string | null {
+  for (const [pattern, facultyName] of DEPT_TO_FACULTY) {
+    pattern.lastIndex = 0;
+    if (pattern.test(text)) return facultyName;
+  }
+  return null;
+}
+
 export function detectIntent(message: string): ChatIntent {
   const text = normalizeMessage(message);
   if (!text) {
@@ -353,14 +430,16 @@ export function detectIntent(message: string): ChatIntent {
     }))
   );
 
-  const faculty = bestMatch(
-    text,
-    FACULTIES.map((f) => ({
-      key: f.faculty,
-      patterns: f.patterns,
-      weight: f.weight ?? 1,
-    }))
-  );
+  // Direct faculty keyword match, falling back to department→faculty resolution.
+  const faculty =
+    bestMatch(
+      text,
+      FACULTIES.map((f) => ({
+        key: f.faculty,
+        patterns: f.patterns,
+        weight: f.weight ?? 1,
+      }))
+    ) ?? resolveDepartmentToFaculty(text);
 
   // Cost/fee language always wins over program/list topics when both fire
   // (e.g. "How much … for the Medicine and Surgery program?").
@@ -388,4 +467,76 @@ export function detectIntent(message: string): ChatIntent {
       /\b(pass|after|next|happen)/i.test(text));
 
   return { topic, faculty, combineFeesAndFaculty, combineExamAndPlacement };
+}
+
+/** True when the user asks about yearly / annual recurring cost. */
+export function isAnnualFeeQuestion(message: string): boolean {
+  const t = normalizeMessage(message);
+  return /\b(yearly|annual|per\s+year|each\s+year|every\s+year|a\s+year)\b/i.test(t);
+}
+
+/** Scan recent history (last ~2 turns) for the most recent faculty/department mention. */
+export function extractFacultyFromHistory(
+  history: { role: string; content: string }[],
+  maxMessages = 6
+): string | null {
+  const recent = history
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .slice(-maxMessages);
+
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const faculty = detectIntent(recent[i].content).faculty;
+    if (faculty) return faculty;
+  }
+  return null;
+}
+
+const CONTEXTUAL_FOLLOW_UP =
+  /\b(great|ok|okay|thanks|thank you|sure|and|also|what about|how about|how much|how many|tell me more)\b/i;
+
+/**
+ * Intent detection with conversation context — carries faculty forward from
+ * recent turns when the current message is a fee/program follow-up.
+ */
+export function detectIntentWithHistory(
+  message: string,
+  history: { role: string; content: string }[] = []
+): ChatIntent {
+  const annualFee = isAnnualFeeQuestion(message);
+  let intent = detectIntent(message);
+
+  // "Yearly tuition" / "annual cost" → fees topic even if patterns are weak
+  if (annualFee && intent.topic !== "fees") {
+    intent = { ...intent, topic: "fees" };
+  }
+
+  if (!intent.faculty) {
+    const fromHistory = extractFacultyFromHistory(history);
+    if (fromHistory) {
+      const feeSignal = intent.topic === "fees" || hasFeeCostSignal(message) || annualFee;
+      const followUp =
+        feeSignal ||
+        CONTEXTUAL_FOLLOW_UP.test(message) ||
+        /\b(it|this|that|the program|the course|there|same)\b/i.test(message);
+
+      if (followUp) {
+        intent = {
+          ...intent,
+          faculty: fromHistory,
+          topic: feeSignal ? "fees" : intent.topic,
+          combineFeesAndFaculty: feeSignal,
+        };
+      }
+    }
+  }
+
+  if ((intent.topic === "fees" || annualFee) && intent.faculty) {
+    intent = { ...intent, combineFeesAndFaculty: true, topic: "fees" };
+  }
+
+  if (annualFee) {
+    intent = { ...intent, annualFee: true };
+  }
+
+  return intent;
 }

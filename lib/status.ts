@@ -1,3 +1,25 @@
+/** Greeting / small-talk detector — runs before RAG to avoid low-confidence handoff. */
+
+const GREETING_PATTERNS: RegExp[] = [
+  /^(hey|hi|hello|hiya|howdy|hola|salaam|salam|yo|sup|what'?s up|wassup)[!.,?]*$/i,
+  /^(good\s?(morning|afternoon|evening|night|day))[!.,?]*$/i,
+  /^(thanks?|thank\s?you|thx|ty|cheers|appreciated?)[!.,?]*$/i,
+  /^(ok|okay|k|cool|got\s?it|noted|sure|alright|sounds good|great|nice|perfect|wonderful|awesome)[!.,?]*$/i,
+  /^(bye|goodbye|see\s?ya|later|take\s?care|cya)[!.,?]*$/i,
+  /^(yes|no|yep|nope|yup|nah)[!.,?]*$/i,
+  /^(lol|haha|hehe|😊|👍|🙏)[!.,?]*$/i,
+];
+
+export function isGreeting(message: string): boolean {
+  const t = message.normalize("NFKC").trim();
+  // Only test short messages (≤ 40 chars) to avoid false-positives on real questions
+  if (t.length > 40) return false;
+  return GREETING_PATTERNS.some((p) => {
+    p.lastIndex = 0;
+    return p.test(t);
+  });
+}
+
 /** Enrollment / application status check via phone number (not RAG). */
 
 const STATUS_CHECK_PATTERNS: RegExp[] = [

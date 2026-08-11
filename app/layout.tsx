@@ -1,4 +1,9 @@
 import type { Metadata } from "next";
+import "./globals.css";
+import { Geist } from "next/font/google";
+import { cn } from "@/lib/utils";
+
+const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
 export const metadata: Metadata = {
   title: "SNUBot",
@@ -11,10 +16,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body style={{ fontFamily: "Georgia, 'Times New Roman', serif", margin: 0 }}>
-        {children}
-      </body>
+    <html lang="en" className={cn("h-full", "font-sans", geist.variable)}>
+      <body className="h-full m-0">{children}</body>
     </html>
   );
 }

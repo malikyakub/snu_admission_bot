@@ -67,7 +67,7 @@ export async function createConversation(): Promise<Conversation> {
   if (error) {
     throw new Error(
       `conversations create failed: ${error.message}. ` +
-        "Run supabase/conversations.sql (and conversations_waiting_for_phone.sql) if needed."
+        "Run supabase/schema.sql if needed."
     );
   }
   return normalizeConversation(data)!;
@@ -96,7 +96,7 @@ export async function getOrCreateConversation(
     if (error) {
       throw new Error(
         `conversations create failed: ${error.message}. ` +
-          "Run supabase/conversations.sql (and conversations_waiting_for_phone.sql) if needed."
+          "Run supabase/schema.sql if needed."
       );
     }
     return normalizeConversation(data)!;

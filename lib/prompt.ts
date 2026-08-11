@@ -13,13 +13,26 @@ Hard rules:
 3. Answer confidently from every CONTEXT passage. Do not hedge, disclaim, or mention confidence / verification status.
 4. Prefer concise, factual answers. Quote numbers and dates exactly as written in CONTEXT.
 5. Write a clean standalone answer for the user. NEVER mention retrieval internals: do not say "chunk", "chunk N", "passage N", "context", "similarity", "confidence", "source_url", or that a source was missing. If a real https URL appears in CONTEXT you may optionally cite it; otherwise say nothing about sources.
-6. Do not claim personal knowledge outside CONTEXT.`;
+6. Do not claim personal knowledge outside CONTEXT.
+
+7. Use Markdown formatting in your answer.
+   - Bold key entity names like faculty/department/program names using **...** (for example: **Faculty of Science**).
+   - If you are listing 3+ items (faculties, programs, fees, steps, etc.), use a proper Markdown list (numbered or bulleted), with each item on its own line.
+   - Avoid comma-separated run-on lists inside a single paragraph; use real line-broken Markdown lists instead.
+   - NEVER append additional items as a prose sentence at the end of a list (e.g. "It also has X, Y, and Z"). Every item — without exception — must be its own list entry on its own line.
+
+8. Fee calculations — strict rules:
+   - NEVER do arithmetic yourself EXCEPT for annual/yearly recurring cost: when the user asks about yearly or annual tuition/fees, the recurring amount is $125 per semester × 2 semesters = $250 per year (service fee only; tuition is free).
+   - For one-time totals (full programme cost), use ONLY the pre-calculated totals in the CONTEXT — do not recompute those.
+   - The registration/ID fee is always $50. Never mention $55 for undergraduates.
+   - Do NOT invent fee items that are not explicitly listed in the CONTEXT (no "$30 exam fee" unless the CONTEXT includes it in the query's scope, no extra charges).
+   - When the question is about yearly/annual cost, lead with the $250/year recurring service fee; mention one-time fees only briefly if helpful.`;
 
 export function buildMessages(
   userMessage: string,
   chunks: KbChunkMatch[],
   history: ChatHistoryMessage[] = [],
-  options: { lowConfidence?: boolean } = {}
+  options: { lowConfidence?: boolean; annualFee?: boolean; contextFaculty?: string | null } = {}
 ): ChatHistoryMessage[] {
   const contextBlock =
     chunks.length === 0
@@ -36,6 +49,15 @@ export function buildMessages(
           })
           .join("\n\n---\n\n");
 
+  const annualNote = options.annualFee
+    ? `\n\nNOTE: The user asked about yearly/annual cost. Recurring service fee = $125 per semester × 2 semesters = $250 per year. Tuition is free. One-time admission fees are separate.`
+    : "";
+
+  const facultyNote =
+    options.contextFaculty && !chunks.some((c) => c.faculty === options.contextFaculty)
+      ? `\n\nNOTE: This follow-up question refers to **${options.contextFaculty}** from the recent conversation.`
+      : "";
+
   const lowConfidenceNote = options.lowConfidence
     ? `\n\nNOTE: Retrieved context is weak or empty for this question. Clearly say you do not have that information. Do NOT invent an answer. Do not mention admins or handoff — that offer is added separately.`
     : "";
@@ -45,7 +67,7 @@ export function buildMessages(
     content: `${SYSTEM_RULES}
 
 CONTEXT:
-${contextBlock}${lowConfidenceNote}`.trim(),
+${contextBlock}${annualNote}${facultyNote}${lowConfidenceNote}`.trim(),
   };
 
   const recent = history
