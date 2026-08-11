@@ -1,21 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import Link from "next/link";
 
-export default function AdminStudentsStub() {
-  const [message, setMessage] = useState("Loading…");
-
-  useEffect(() => {
-    setMessage(
-      "Admin routes are scaffolded next. This is a placeholder page so /login can redirect successfully for now."
-    );
-  }, []);
-
+export default function AdminStudentsPage() {
   return (
-    <main className="mx-auto max-w-xl p-3 pb-8">
-      <h1 className="text-xl font-semibold">Admin - Students</h1>
-      <p className="mt-2 text-sm text-slate-600">{message}</p>
-    </main>
+    <div className="shrink-0">
+      <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+        Students
+      </h1>
+      <p className="mt-2 text-sm text-slate-600">
+        Student management UI comes next. Use the{" "}
+        <Link href="/admin/dashboard" className="text-sky-700 hover:underline">
+          dashboard
+        </Link>{" "}
+        for live totals.
+      </p>
+    </div>
   );
 }
-

@@ -7,12 +7,12 @@ import { appendEnrollCta, ctaMarker, hasCta } from "./cta";
  */
 const ENROLL_PATTERNS: RegExp[] = [
   /\b(enroll|enrol|enrollment)\b/i,
-  /\b(sign\s*me\s*up|register\s*me)\b/i,
-  /\b(i\s+want\s+to\s+(enroll|apply|register))\b/i,
-  /\b(can\s+you|could\s+you|please)\s+(enroll|register|sign\s*me\s*up)\b/i,
+  /\b(sign\s*me\s*up|sign\s*up|register\s*me)\b/i,
+  /\b(i\s+want\s+to\s+(enroll|apply|register|sign\s*up))\b/i,
+  /\b(can\s+you|could\s+you|please)\s+(enroll|register|sign\s*me\s*up|sign\s*up)\b/i,
   /\b(enroll|register)\s+me\b/i,
   /\b(enroll|apply|register)\s+(me\s+)?(for|to|in)\b/i,
-  /\bhelp\s+me\s+(apply|enroll|register)\b/i,
+  /\bhelp\s+me\s+(apply|enroll|register|sign\s*up)\b/i,
   /\b(i('?m|\s+am)\s+ready\s+to\s+(apply|enroll|register))\b/i,
   /\bstart\s+(my\s+)?(application|enrollment|applying)\b/i,
   /\bapply\s+(now|for\s+admission)\b/i,
@@ -21,6 +21,7 @@ const ENROLL_PATTERNS: RegExp[] = [
   /\bhow\s+(do|can|to)\s+i\s+apply\b/i,
   /\bapplication\s+process\b/i,
   /\bwant\s+to\s+apply\b/i,
+  /\bget\s+me\s+(enrolled|registered|admitted)\b/i,
 ];
 
 /** True when the user is asking about applying / enrolling — offer a CTA. */
@@ -84,7 +85,7 @@ export function shouldOfferEnrollmentCta(
   return null;
 }
 
-/** Shown after the student clicks the enroll CTA / + button. */
+/** Shown after the student clicks the enroll CTA. */
 export function enrollmentWelcomeMessage(): string {
   return (
     "Great — I'll help you start your SNU application.\n\n" +

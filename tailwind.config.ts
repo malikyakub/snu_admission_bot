@@ -44,9 +44,14 @@ const config: Config = {
         },
       },
       borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        // Sharper than default Tailwind — prefer square over pill
+        sm: "2px",
+        DEFAULT: "4px",
+        md: "4px",
+        lg: "6px",
+        xl: "6px",
+        "2xl": "8px",
+        "3xl": "8px",
       },
     },
   },

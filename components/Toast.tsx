@@ -8,14 +8,14 @@ import {
   useMemo,
   useState,
 } from "react";
-import { CheckCircle2, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type ToastItem = {
   id: string;
   title: string;
   description?: string;
-  variant?: "default" | "success" | "info";
+  variant?: "default" | "success" | "info" | "error";
   durationMs?: number;
 };
 
@@ -86,21 +86,25 @@ function ToastCard({
     return () => window.clearTimeout(t);
   }, [item.durationMs, onDismiss]);
 
+  const Icon = item.variant === "error" ? AlertCircle : CheckCircle2;
+
   return (
     <div
       className={cn(
         "pointer-events-auto flex items-start gap-3 rounded-xl border bg-white px-4 py-3 shadow-lg animate-in fade-in-0 slide-in-from-top-2",
         item.variant === "success" && "border-emerald-200",
         item.variant === "info" && "border-sky-200",
+        item.variant === "error" && "border-amber-200",
         (!item.variant || item.variant === "default") && "border-slate-200"
       )}
       role="status"
     >
-      <CheckCircle2
+      <Icon
         className={cn(
           "mt-0.5 h-5 w-5 shrink-0",
           item.variant === "success" && "text-emerald-600",
           item.variant === "info" && "text-sky-600",
+          item.variant === "error" && "text-amber-600",
           (!item.variant || item.variant === "default") && "text-slate-500"
         )}
       />

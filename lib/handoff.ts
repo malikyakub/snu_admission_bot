@@ -70,3 +70,45 @@ export function appendHandoffOffer(answer: string): string {
 export function handoffConfirmMessage(): string {
   return HANDOFF_CONFIRM;
 }
+
+/** When an admin hands the thread back and the student did not leave a pending question. */
+export function handoffWelcomeBackMessage(): string {
+  return "Welcome back — I'm here to help again. What would you like to know about SNU admissions?";
+}
+
+/**
+ * True when the user is clarifying / challenging a previous assistant answer
+ * (e.g. "why…", "you just provided it") rather than starting a new topic.
+ */
+export function isClarificationFollowUp(
+  message: string,
+  history: { role: string; content: string }[]
+): boolean {
+  let hasSubstantivePrior = false;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role !== "assistant") continue;
+    const prior = m.content.replace(/\[\[cta:[^\]]+\]\]/gi, "").trim();
+    if (
+      prior.length >= 40 &&
+      !/^i (do )?not have that information\.?$/i.test(prior)
+    ) {
+      hasSubstantivePrior = true;
+      break;
+    }
+  }
+  if (!hasSubstantivePrior) return false;
+
+  const t = message
+    .normalize("NFKC")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t || t.length > 220) return false;
+
+  return (
+    /^(why|how come|really|are you sure|wait|huh)\b/i.test(t) ||
+    /\b(why (would|do|does|is|are)|how come|you just|but you|earlier you|you (said|provided|mentioned|gave|listed)|both (4|6|four|six)|contradict|explain (that|this|it)|that (can'?t|doesn'?t))\b/i.test(
+      t
+    )
+  );
+}

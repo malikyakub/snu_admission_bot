@@ -492,7 +492,7 @@ export function extractFacultyFromHistory(
 }
 
 const CONTEXTUAL_FOLLOW_UP =
-  /\b(great|ok|okay|thanks|thank you|sure|and|also|what about|how about|how much|how many|tell me more)\b/i;
+  /\b(great|ok|okay|thanks|thank you|sure|and|also|what about|how about|how much|how many|tell me more|why|how come|you just|both)\b/i;
 
 /**
  * Intent detection with conversation context — carries faculty forward from

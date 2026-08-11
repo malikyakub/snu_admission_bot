@@ -5,11 +5,13 @@ import {
   markNeedsHuman,
   setWaitingForPhone,
 } from "@/lib/conversations";
+import { clientIpFromHeaders } from "@/lib/request-ip";
 import { embedQuery } from "@/lib/embeddings";
 import {
   appendHandoffOffer,
   handoffConfirmMessage,
   isAffirmativeHandoff,
+  isClarificationFollowUp,
   isLowConfidence,
   lastAssistantOfferedHandoff,
 } from "@/lib/handoff";
@@ -24,6 +26,7 @@ import {
   lastAssistantAskedForPhone,
   lastAssistantOfferedStartEnrollment,
   lastAssistantStatusNotFound,
+  shouldExitPhoneWait,
   startEnrollmentStubMessage,
   statusAskForPhoneMessage,
   statusNotFoundMessage,
@@ -50,9 +53,10 @@ import {
   sourcesFromChunks,
 } from "@/lib/sources";
 import {
-  saveAssistantWhenReady,
   saveMessageAsync,
   saveTurnAsync,
+  saveTurnNow,
+  saveUserAndAssistantWhenReady,
 } from "@/lib/messages";
 
 export const runtime = "nodejs";
@@ -75,6 +79,8 @@ type ChatBody = {
   history?: ChatHistoryMessage[];
   conversation_id?: string;
   stream?: boolean;
+  /** Re-answer an existing student message (e.g. after admin hand-back). */
+  skip_user_save?: boolean;
 };
 
 function jsonError(message: string, status = 400) {
@@ -219,17 +225,6 @@ function tapSseStream(
   return { stream, textPromise };
 }
 
-/** JSON reply helper — fires message persistence without awaiting it. */
-function jsonReply(
-  conversationId: string | null,
-  userMessage: string,
-  payload: Record<string, unknown>
-) {
-  const answer = typeof payload.answer === "string" ? payload.answer : "";
-  saveTurnAsync(conversationId, userMessage, answer);
-  return Response.json(payload);
-}
-
 export async function POST(req: Request) {
   let body: ChatBody;
   try {
@@ -248,7 +243,26 @@ export async function POST(req: Request) {
   }
 
   const history = body.history ?? [];
-  const wantStream = body.stream !== false;
+  const skipUserSave = body.skip_user_save === true;
+  // Hand-back resume must wait for a full JSON answer (no SSE).
+  const wantStream = skipUserSave ? false : body.stream !== false;
+  const clientIp = clientIpFromHeaders(req.headers);
+
+  async function jsonReply(
+    conversationId: string | null,
+    userMessage: string,
+    payload: Record<string, unknown>
+  ) {
+    const answer = typeof payload.answer === "string" ? payload.answer : "";
+    if (skipUserSave) {
+      const saved = await saveTurnNow(conversationId, userMessage, answer, {
+        skipUserSave: true,
+      });
+      return Response.json({ ...payload, message: saved });
+    }
+    saveTurnAsync(conversationId, userMessage, answer);
+    return Response.json(payload);
+  }
 
   try {
     let conversation = null as Awaited<
@@ -258,12 +272,33 @@ export async function POST(req: Request) {
 
     try {
       conversation = body.conversation_id
-        ? await getOrCreateConversation(body.conversation_id)
+        ? await getOrCreateConversation(body.conversation_id, {
+            ipAddress: clientIp,
+          })
         : null;
     } catch (err) {
       conversationError =
         err instanceof Error ? err.message : "conversations unavailable";
       console.warn("[/api/chat] conversation load:", conversationError);
+    }
+
+    // --- Strict handoff: bot stays silent while an admin owns the thread ---
+    if (conversation?.needs_human) {
+      if (!skipUserSave) {
+        saveMessageAsync(conversation.id, "user", message);
+      }
+      return Response.json({
+        answer: "",
+        conversation_id: conversation.id,
+        needs_human: true,
+        handoff_offered: false,
+        low_confidence: false,
+        top_similarity: null,
+        intent: EMPTY_INTENT,
+        sources: [],
+        flow: "human_handoff",
+        silent: true,
+      });
     }
 
     // --- Greeting / small-talk shortcut (before RAG) ---
@@ -313,24 +348,60 @@ export async function POST(req: Request) {
 
     if (awaitingPhone) {
       const phone = phoneInMessage;
-      if (!phone) {
-        return jsonReply(conversation?.id ?? null, message, {
-          answer:
-            "I still need the phone number from your application. You can send it as `61…` or `+252 61…` — spaces are fine.",
-          conversation_id: conversation?.id ?? null,
-          needs_human: false,
-          handoff_offered: false,
-          low_confidence: false,
-          top_similarity: null,
-          intent: { ...EMPTY_INTENT, topic: "status_check" },
-          sources: [],
-          flow: "waiting_for_phone",
-        });
-      }
 
+      // No phone — allow leaving status-check for enrollment / new questions
+      if (!phone) {
+        if (shouldExitPhoneWait(message)) {
+          try {
+            if (conversation) {
+              await setWaitingForPhone(conversation.id, false);
+              conversation = { ...conversation, waiting_for_phone: false };
+            }
+          } catch (err) {
+            console.warn(
+              "[/api/chat] clear waiting_for_phone (topic change):",
+              err instanceof Error ? err.message : err
+            );
+          }
+
+          // Enrollment intent: switch immediately (don't wait for a second turn)
+          if (
+            isEnrollInterest(message) ||
+            isStartEnrollmentAffirmative(message)
+          ) {
+            return jsonReply(conversation?.id ?? null, message, {
+              answer: startEnrollmentStubMessage(),
+              conversation_id: conversation?.id ?? null,
+              needs_human: false,
+              handoff_offered: false,
+              low_confidence: false,
+              top_similarity: null,
+              intent: { ...EMPTY_INTENT, topic: "enrollment_start" },
+              sources: [],
+              flow: "enrollment_offer",
+              open_enrollment: false,
+              exited_phone_wait: true,
+            });
+          }
+          // Fall through to RAG / other handlers for KB questions
+        } else {
+          return jsonReply(conversation?.id ?? null, message, {
+            answer:
+              "I still need the phone number from your application. You can send it as `61…` or `+252 61…` — spaces are fine.",
+            conversation_id: conversation?.id ?? null,
+            needs_human: false,
+            handoff_offered: false,
+            low_confidence: false,
+            top_similarity: null,
+            intent: { ...EMPTY_INTENT, topic: "status_check" },
+            sources: [],
+            flow: "waiting_for_phone",
+          });
+        }
+      } else {
       if (!conversation) {
         try {
-          conversation = await createConversation();
+          conversation = await createConversation({ ipAddress: clientIp });
         } catch (err) {
           conversationError =
             err instanceof Error ? err.message : "create conversation failed";
@@ -395,15 +466,16 @@ export async function POST(req: Request) {
           });
         }
 
-        // Not found — keep waiting so they can retry another format
+        // Not found — clear wait so a topic change isn't trapped; phone retry
+        // still works via lastAssistantStatusNotFound + extractPhoneNumber.
         try {
           if (conversation) {
-            await setWaitingForPhone(conversation.id, true);
-            conversation = { ...conversation, waiting_for_phone: true };
+            await setWaitingForPhone(conversation.id, false);
+            conversation = { ...conversation, waiting_for_phone: false };
           }
         } catch (err) {
           console.warn(
-            "[/api/chat] keep waiting_for_phone:",
+            "[/api/chat] clear waiting_for_phone after not-found:",
             err instanceof Error ? err.message : err
           );
         }
@@ -425,13 +497,14 @@ export async function POST(req: Request) {
         console.error("[/api/chat] student lookup:", msg);
         return jsonError(`Student lookup failed: ${msg}`, 500);
       }
+      }
     }
 
     // --- Start status-check flow: ask for phone (no RAG) ---
     if (isStatusCheckIntent(message)) {
       try {
         if (!conversation) {
-          conversation = await createConversation();
+          conversation = await createConversation({ ipAddress: clientIp });
         }
         await setWaitingForPhone(conversation.id, true);
         conversation = { ...conversation, waiting_for_phone: true };
@@ -442,7 +515,7 @@ export async function POST(req: Request) {
         console.warn("[/api/chat] waiting_for_phone:", conversationError);
         if (!conversation) {
           try {
-            conversation = await createConversation();
+            conversation = await createConversation({ ipAddress: clientIp });
           } catch {
             /* history fallback still works for the next turn */
           }
@@ -478,7 +551,7 @@ export async function POST(req: Request) {
       let persisted = false;
       try {
         if (!conversation) {
-          conversation = await createConversation();
+          conversation = await createConversation({ ipAddress: clientIp });
         }
         await markNeedsHuman(conversation.id);
         conversation = {
@@ -576,12 +649,16 @@ export async function POST(req: Request) {
       chunks.length > 0 && typeof chunks[0].similarity === "number"
         ? chunks[0].similarity
         : null;
-    const lowConfidence = isLowConfidence(topSimilarity, chunks.length);
+    const clarificationFollowUp = isClarificationFollowUp(message, history);
+    const retrievalLow = isLowConfidence(topSimilarity, chunks.length);
+    // Clarifications of a prior answer should be addressed, not refused/handed off
+    const lowConfidence = retrievalLow && !clarificationFollowUp;
 
     const messages = buildMessages(message, chunks, history, {
-      lowConfidence,
+      lowConfidence: retrievalLow,
       annualFee: intent.annualFee,
       contextFaculty: intent.faculty,
+      clarificationFollowUp,
     });
 
     const groqSignal = AbortSignal.timeout(18_000); // 18 s — below Vercel's 30 s limit
@@ -607,10 +684,10 @@ export async function POST(req: Request) {
     }
 
     let handoffOfferedThisTurn = false;
-    if (lowConfidence) {
+    if (lowConfidence && !isEnrollInterest(message)) {
       try {
         if (!conversation) {
-          conversation = await createConversation();
+          conversation = await createConversation({ ipAddress: clientIp });
         }
         await markHandoffOffered(conversation.id);
         conversation = { ...conversation, handoff_offered: true };
@@ -626,16 +703,13 @@ export async function POST(req: Request) {
 
     const conversationId = conversation?.id ?? null;
 
-    // Persist user message immediately (non-blocking) for all RAG replies
-    saveMessageAsync(conversationId, "user", message);
-
     if (wantStream && groqRes.body) {
       let suffix = "";
-      if (lowConfidence) {
-        suffix = `\n\n${ctaMarker("handoff", "Connect with an admin")}`;
-      } else if (isEnrollInterest(message)) {
+      if (isEnrollInterest(message)) {
         const fac = resolveFacultyFromMessage(message, intent.faculty);
         suffix = enrollmentCtaMessage(fac);
+      } else if (lowConfidence) {
+        suffix = `\n\n${ctaMarker("handoff", "Connect with an admin")}`;
       }
 
       const sourceList = sourcesFromChunks(chunks);
@@ -644,8 +718,8 @@ export async function POST(req: Request) {
         : groqRes.body;
 
       const { stream: streamOut, textPromise } = tapSseStream(withSuffix);
-      // Assistant row lands after stream finishes — still non-blocking for TTFB
-      saveAssistantWhenReady(conversationId, textPromise);
+      // User then assistant, sequentially after the response (avoids ordering races)
+      saveUserAndAssistantWhenReady(conversationId, message, textPromise);
 
       return new Response(streamOut, {
         headers: {
@@ -669,17 +743,48 @@ export async function POST(req: Request) {
       choices?: { message?: { content?: string } }[];
     };
     let answer = completion.choices?.[0]?.message?.content ?? "";
-    if (lowConfidence) {
-      answer = appendHandoffOffer(answer);
-    } else if (isEnrollInterest(message)) {
+    if (isEnrollInterest(message)) {
       const fac = resolveFacultyFromMessage(message, intent.faculty);
       answer = withEnrollmentOffer(answer, fac);
+    } else if (lowConfidence) {
+      answer = appendHandoffOffer(answer);
     }
 
     const sourceList = sourcesFromChunks(chunks);
 
-    // User already queued above; only need assistant here (non-blocking)
-    saveMessageAsync(conversationId, "assistant", answer);
+    if (skipUserSave) {
+      const saved = await saveTurnNow(conversationId, message, answer, {
+        skipUserSave: true,
+      });
+      return Response.json({
+        answer,
+        conversation_id: conversationId,
+        needs_human: conversation?.needs_human ?? false,
+        handoff_offered: handoffOfferedThisTurn,
+        low_confidence: lowConfidence,
+        top_similarity: topSimilarity,
+        intent,
+        sources: sourceList,
+        message: saved,
+        chunks: chunks.map((c) => ({
+          id: c.id,
+          topic: c.topic,
+          faculty: c.faculty,
+          confidence: c.confidence,
+          source_url: c.source_url,
+          similarity: c.similarity,
+        })),
+        ...(conversationError
+          ? {
+              warning:
+                "Could not persist conversation handoff state. Run supabase/schema.sql in Supabase.",
+              conversation_error: conversationError,
+            }
+          : {}),
+      });
+    }
+
+    saveTurnAsync(conversationId, message, answer);
 
     return Response.json({
       answer,

@@ -85,7 +85,14 @@ alter table public.conversations
   add column if not exists waiting_for_phone boolean not null default false;
 
 alter table public.conversations
+  add column if not exists ip_address text;
+
+alter table public.conversations
   add column if not exists updated_at timestamptz not null default now();
+
+create index if not exists conversations_ip_address_idx
+  on public.conversations (ip_address)
+  where ip_address is not null;
 
 create or replace function public.set_conversations_updated_at()
 returns trigger
@@ -112,13 +119,36 @@ create index if not exists conversations_needs_human_idx
 create table if not exists public.messages (
   id uuid primary key default gen_random_uuid(),
   conversation_id uuid not null references public.conversations (id) on delete cascade,
-  role text not null check (role in ('user', 'assistant', 'system')),
+  role text not null check (role in ('user', 'assistant', 'system', 'admin')),
   content text not null,
   created_at timestamptz not null default now()
 );
 
+-- Allow admin replies on handoff chats (safe to re-run)
+alter table public.messages drop constraint if exists messages_role_check;
+alter table public.messages
+  add constraint messages_role_check
+  check (role in ('user', 'assistant', 'system', 'admin'));
+
 create index if not exists messages_conversation_id_idx
   on public.messages (conversation_id, created_at);
+
+-- Optional chat title for admin / sidebar (filled from first user message)
+alter table public.conversations
+  add column if not exists title text;
+
+-- Realtime for admin "Recent chats" (ignore if already added)
+do $$
+begin
+  begin
+    alter publication supabase_realtime add table public.messages;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.conversations;
+  exception when duplicate_object then null;
+  end;
+end $$;
 
 
 -- ── 5. students ─────────────────────────────────────────────
@@ -241,6 +271,45 @@ grant select, insert, update on public.conversations to anon, authenticated, ser
 grant select, insert         on public.messages      to anon, authenticated, service_role;
 grant select, insert, update on public.students      to anon, authenticated, service_role;
 grant select                 on public.kb_chunks     to anon, authenticated, service_role;
+
+-- Student clients need SELECT under RLS (Realtime + optional direct reads).
+-- Primary load path is GET /api/conversations/[id] with the service role.
+alter table public.conversations enable row level security;
+alter table public.messages enable row level security;
+
+drop policy if exists conversations_select_public on public.conversations;
+create policy conversations_select_public
+  on public.conversations
+  for select
+  to anon, authenticated
+  using (true);
+
+drop policy if exists messages_select_public on public.messages;
+create policy messages_select_public
+  on public.messages
+  for select
+  to anon, authenticated
+  using (true);
+
+
+-- ── 6b. admins (staff accounts allowed into /admin) ─────────
+-- id must match auth.users.id for that staff member.
+
+create table if not exists public.admins (
+  id uuid primary key references auth.users (id) on delete cascade,
+  email text not null unique,
+  full_name text,
+  created_at timestamptz not null default now()
+);
+
+alter table public.admins enable row level security;
+
+drop policy if exists admins_select_own on public.admins;
+create policy admins_select_own on public.admins
+  for select to authenticated
+  using (auth.uid() = id);
+
+grant select on public.admins to authenticated, service_role;
 
 
 -- ── 7. Storage buckets (enrollment documents) ───────────────

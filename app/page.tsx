@@ -12,8 +12,10 @@ import {
   Menu,
   ArrowRight,
   User,
+  UserStar,
   X,
   MessageSquare,
+  Loader2,
 } from "lucide-react";
 import { EnrollmentPanel } from "@/components/EnrollmentPanel";
 import { useToast } from "@/components/Toast";
@@ -27,13 +29,18 @@ import {
   decodeSourcesHeader,
   type ChatSource,
 } from "@/lib/sources";
+import {
+  fetchConversationBundle,
+  type RemoteChatMessage,
+} from "@/lib/student-realtime";
 
 /* ------------------------------------------------------------------ */
 /* Types & localStorage helpers                                         */
 /* ------------------------------------------------------------------ */
 
 type ChatMessage = {
-  role: "user" | "assistant";
+  id?: string;
+  role: "user" | "assistant" | "admin";
   content: string;
   sources?: ChatSource[];
 };
@@ -48,26 +55,75 @@ type ConversationIndexEntry = {
 };
 
 const LS_ACTIVE = "snubot:active_conversation_id";
-const LS_INDEX  = "snubot:conversation_index_v1";
-const LS_MSG    = (id: string) => `snubot:conversation_messages:${id}`;
-const LS_META   = (id: string) => `snubot:conversation_meta:${id}`;
+const LS_INDEX = "snubot:conversation_index_v1";
 
 function safeJson<T>(raw: string | null): T | null {
   if (!raw) return null;
-  try { return JSON.parse(raw) as T; } catch { return null; }
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
 }
-function loadMessages(id: string): ChatMessage[] {
-  const p = safeJson<ChatMessage[]>(localStorage.getItem(LS_MSG(id)));
-  return Array.isArray(p) ? p : [];
+
+function readIndex(): Record<string, ConversationIndexEntry> {
+  return (
+    safeJson<Record<string, ConversationIndexEntry>>(
+      localStorage.getItem(LS_INDEX)
+    ) ?? {}
+  );
 }
-function loadMeta(id: string) {
-  const p = safeJson<{ adminHandoff: boolean }>(localStorage.getItem(LS_META(id)));
-  return { adminHandoff: Boolean(p?.adminHandoff) };
-}
+
 function upsertIndex(entry: ConversationIndexEntry) {
-  const idx = safeJson<Record<string, ConversationIndexEntry>>(localStorage.getItem(LS_INDEX)) ?? {};
+  const idx = readIndex();
   idx[entry.conversation_id] = entry;
   localStorage.setItem(LS_INDEX, JSON.stringify(idx));
+}
+
+function setActiveConversationId(id: string) {
+  localStorage.setItem(LS_ACTIVE, JSON.stringify(id));
+}
+
+function readActiveConversationId(): string | null {
+  return safeJson<string>(localStorage.getItem(LS_ACTIVE));
+}
+
+function sortedIndexList(): ConversationIndexEntry[] {
+  return Object.values(readIndex()).sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function titleFromMessages(messages: ChatMessage[]): string {
+  return (
+    messages.find((m) => m.role === "user")?.content?.trim()?.slice(0, 60) ||
+    "New conversation"
+  );
+}
+
+/** Sidebar metadata only — message bodies live in the DB. */
+function syncIndexMeta(
+  conversationId: string,
+  messages: ChatMessage[],
+  adminHandoff: boolean,
+  opts?: { bumpUpdatedAt?: boolean; title?: string | null }
+) {
+  const prev = readIndex()[conversationId];
+  const bump = opts?.bumpUpdatedAt !== false;
+  const dbTitle = opts?.title?.trim() || null;
+  const prevTitle = prev?.title?.trim() || null;
+  const title =
+    dbTitle ||
+    (prevTitle && prevTitle !== "New conversation" ? prevTitle : null) ||
+    titleFromMessages(messages) ||
+    "New conversation";
+
+  upsertIndex({
+    conversation_id: conversationId,
+    createdAt: prev?.createdAt ?? Date.now(),
+    updatedAt: bump ? Date.now() : (prev?.updatedAt ?? Date.now()),
+    title,
+    messageCount: messages.length,
+    adminHandoff,
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -101,6 +157,85 @@ function UserAvatar() {
   );
 }
 
+function AdminAvatar() {
+  return (
+    <div className="w-8 h-8 rounded-full bg-sky-600 flex items-center justify-center shrink-0">
+      <UserStar className="w-4 h-4 text-white" />
+    </div>
+  );
+}
+
+function remoteToChatMessages(rows: RemoteChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const row of rows) {
+    if (row.role === "system") continue;
+    if (row.role !== "user" && row.role !== "assistant" && row.role !== "admin") {
+      continue;
+    }
+    out.push({
+      id: row.id,
+      role: row.role,
+      content: row.content,
+    });
+  }
+  return out;
+}
+
+/** Merge remote DB messages into local UI state without clobbering an in-flight stream. */
+function mergeRemoteIntoLocal(
+  local: ChatMessage[],
+  remote: ChatMessage[],
+  isPending: boolean
+): ChatMessage[] {
+  if (remote.length === 0) return local;
+
+  if (isPending) {
+    const ids = new Set(local.map((m) => m.id).filter(Boolean) as string[]);
+    const fingerprints = new Set(local.map((m) => `${m.role}\0${m.content}`));
+    const next = [...local];
+    for (const m of remote) {
+      if (m.id && ids.has(m.id)) continue;
+      if (fingerprints.has(`${m.role}\0${m.content}`)) continue;
+      // During a stream, only pull in admin replies
+      if (m.role === "admin") {
+        next.push(m);
+        if (m.id) ids.add(m.id);
+        fingerprints.add(`${m.role}\0${m.content}`);
+      }
+    }
+    return next;
+  }
+
+  // Prefer remote order; keep local sources on matching assistant messages
+  const sourceByContent = new Map<string, ChatSource[]>();
+  for (const m of local) {
+    if (m.role === "assistant" && m.sources?.length) {
+      sourceByContent.set(m.content, m.sources);
+    }
+  }
+
+  const merged = remote.map((m) => {
+    if (m.role === "assistant") {
+      const sources = sourceByContent.get(m.content);
+      return sources ? { ...m, sources } : m;
+    }
+    return m;
+  });
+
+  // Keep local-only turns not yet persisted (enrollment welcome, race before insert)
+  const remoteIds = new Set(merged.map((m) => m.id).filter(Boolean) as string[]);
+  const remoteFingerprints = new Set(
+    merged.map((m) => `${m.role}\0${m.content}`)
+  );
+  for (const m of local) {
+    if (m.id && remoteIds.has(m.id)) continue;
+    if (remoteFingerprints.has(`${m.role}\0${m.content}`)) continue;
+    merged.push(m);
+  }
+
+  return merged;
+}
+
 /** Assistant body: flat text (no bubble) + clickable → CTAs + source badges */
 function AssistantBody({
   content,
@@ -120,6 +255,7 @@ function AssistantBody({
   }
 
   const cleaned = content
+    .replace(/\[\[open_enrollment\]\]/gi, "")
     .replace(
       /\n*\s*For more information[^\n.]*(?:\.|$)/gi,
       ""
@@ -256,19 +392,25 @@ export default function HomePage() {
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [messages, setMessages]   = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
   const [adminHandoff, setAdminHandoff] = useState(false);
   const [inputValue, setInputValue] = useState("");
-  const [pending, setPending]     = useState(false);
+  const [pending, setPending] = useState(false);
   const [queryConvId, setQueryConvId] = useState<string | null>(null);
-  const [convList, setConvList]   = useState<ConversationIndexEntry[]>([]);
+  const [convList, setConvList] = useState<ConversationIndexEntry[]>([]);
 
   const [enrollOpen, setEnrollOpen] = useState(false);
 
-  const scrollRef         = useRef<HTMLDivElement | null>(null);
-  const persistTimer      = useRef<number | null>(null);
-  const inputRef          = useRef<HTMLInputElement | null>(null);
-  const enrollCtaOffered  = useRef(false);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const enrollCtaOffered = useRef(false);
+  const pendingRef = useRef(false);
+  const adminHandoffRef = useRef(false);
+  const indexFingerprintRef = useRef<string>("");
+
+  pendingRef.current = pending;
+  adminHandoffRef.current = adminHandoff;
 
   function notifyConnectedToAdmin() {
     setAdminHandoff(true);
@@ -279,6 +421,64 @@ export default function HomePage() {
     });
   }
 
+  const refreshConvList = useCallback(() => {
+    setConvList(sortedIndexList());
+  }, []);
+
+  const syncFromRemote = useCallback(
+    async (id: string, opts?: { replace?: boolean }) => {
+      const { messages: remoteRows, meta } = await fetchConversationBundle(id);
+      const remote = remoteToChatMessages(remoteRows);
+      let merged: ChatMessage[] = remote;
+
+      setMessages((prev) => {
+        // Auto-open enrollment when admin kicked it off
+        const hadOpenMarker = prev.some(
+          (m) =>
+            m.role === "assistant" && /\[\[open_enrollment\]\]/i.test(m.content)
+        );
+        const hasOpenMarker = remote.some(
+          (m) =>
+            m.role === "assistant" && /\[\[open_enrollment\]\]/i.test(m.content)
+        );
+        if (hasOpenMarker && !hadOpenMarker) {
+          queueMicrotask(() => {
+            setEnrollOpen(true);
+            setAdminHandoff(false);
+          });
+        }
+
+        merged = opts?.replace
+          ? remote
+          : mergeRemoteIntoLocal(prev, remote, pendingRef.current);
+        return merged;
+      });
+
+      const handedOff = meta?.needs_human === true;
+      if (handedOff && !adminHandoffRef.current) {
+        notifyConnectedToAdmin();
+      } else if (handedOff) {
+        setAdminHandoff(true);
+      } else if (meta && meta.needs_human === false) {
+        // Admin released the thread back to the bot
+        setAdminHandoff(false);
+      }
+
+      const handoffFlag = handedOff;
+      const prev = readIndex()[id];
+      const grew = merged.length > (prev?.messageCount ?? 0);
+      const dbTitle = meta?.title ?? null;
+      indexFingerprintRef.current = `${merged.length}:${merged.map((m) => m.id ?? m.content).join("|")}:${handoffFlag}:${dbTitle ?? ""}`;
+      syncIndexMeta(id, merged, handoffFlag, {
+        bumpUpdatedAt: grew,
+        title: dbTitle,
+      });
+      refreshConvList();
+      return merged.length;
+    },
+    [toast, refreshConvList]
+  );
+
   /* read ?conversation= from URL on mount */
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
@@ -286,64 +486,104 @@ export default function HomePage() {
     setQueryConvId(q?.trim() || null);
   }, []);
 
-  /* bootstrap / load conversation */
+  /* bootstrap: keep only conversation id locally; load messages from DB */
   useEffect(() => {
     let cancelled = false;
+
     async function bootstrap() {
+      // Drop legacy local message caches (messages now live in DB)
+      try {
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (
+            key?.startsWith("snubot:conversation_messages:") ||
+            key?.startsWith("snubot:conversation_meta:")
+          ) {
+            keysToRemove.push(key);
+          }
+        }
+        for (const key of keysToRemove) localStorage.removeItem(key);
+      } catch {
+        /* ignore */
+      }
+
       const reuseId =
-        (queryConvId?.trim() || null) ??
-        (safeJson<string>(localStorage.getItem(LS_ACTIVE)) ?? null);
+        (queryConvId?.trim() || null) ?? readActiveConversationId();
 
       if (reuseId) {
-        if (!cancelled) {
-          setConversationId(reuseId);
-          setMessages(loadMessages(reuseId));
-          setAdminHandoff(loadMeta(reuseId).adminHandoff);
+        if (cancelled) return;
+        setActiveConversationId(reuseId);
+        setConversationId(reuseId);
+        setMessagesLoading(true);
+        const cached = readIndex()[reuseId];
+        setAdminHandoff(Boolean(cached?.adminHandoff));
+        try {
+          await syncFromRemote(reuseId, { replace: true });
+        } finally {
+          if (!cancelled) setMessagesLoading(false);
         }
         return;
       }
 
       const newId = crypto.randomUUID();
-      if (!cancelled) {
-        localStorage.setItem(LS_ACTIVE, JSON.stringify(newId));
-        localStorage.setItem(LS_MSG(newId),  JSON.stringify([]));
-        localStorage.setItem(LS_META(newId), JSON.stringify({ adminHandoff: false }));
-        upsertIndex({ conversation_id: newId, createdAt: Date.now(), updatedAt: Date.now(), title: "New conversation", messageCount: 0, adminHandoff: false });
-        setConversationId(newId);
-        setMessages([]);
-        setAdminHandoff(false);
-      }
+      if (cancelled) return;
+      setActiveConversationId(newId);
+      upsertIndex({
+        conversation_id: newId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        title: "New conversation",
+        messageCount: 0,
+        adminHandoff: false,
+      });
+      setConversationId(newId);
+      setMessages([]);
+      setMessagesLoading(false);
+      setAdminHandoff(false);
+      refreshConvList();
     }
-    bootstrap();
-    return () => { cancelled = true; };
+
+    void bootstrap();
+    return () => {
+      cancelled = true;
+    };
+    // Only re-bootstrap when the URL conversation id changes — not when sync identity changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryConvId]);
 
-  /* reload sidebar list */
+  /* Keep sidebar titles/counts in sync; never bump order on hydrate/select */
   useEffect(() => {
-    const idx = safeJson<Record<string, ConversationIndexEntry>>(localStorage.getItem(LS_INDEX)) ?? {};
-    setConvList(Object.values(idx).sort((a, b) => b.updatedAt - a.updatedAt));
-  }, [messages, conversationId]);
+    if (!conversationId || messagesLoading) return;
+    syncIndexMeta(conversationId, messages, adminHandoff, {
+      bumpUpdatedAt: false,
+    });
+    refreshConvList();
+  }, [messages, adminHandoff, conversationId, messagesLoading, refreshConvList]);
 
-  /* persist messages debounced */
+  /* reload sidebar when conversation changes */
   useEffect(() => {
-    if (!conversationId) return;
-    if (persistTimer.current) window.clearTimeout(persistTimer.current);
-    persistTimer.current = window.setTimeout(() => {
-      try {
-        localStorage.setItem(LS_MSG(conversationId), JSON.stringify(messages));
-        const title = messages.find((m) => m.role === "user")?.content?.trim()?.slice(0, 60) ?? "New conversation";
-        const idx = safeJson<Record<string, ConversationIndexEntry>>(localStorage.getItem(LS_INDEX)) ?? {};
-        upsertIndex({ conversation_id: conversationId, createdAt: idx[conversationId]?.createdAt ?? Date.now(), updatedAt: Date.now(), title, messageCount: messages.length, adminHandoff });
-        localStorage.setItem(LS_META(conversationId), JSON.stringify({ adminHandoff }));
-      } catch { /* quota */ }
-    }, 150);
-    return () => { if (persistTimer.current) window.clearTimeout(persistTimer.current); };
-  }, [messages, adminHandoff, conversationId]);
+    refreshConvList();
+  }, [conversationId, refreshConvList]);
 
   /* auto-scroll */
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages.length, pending]);
+
+  /* Poll for new messages (admin replies). Prefer API over anon Realtime — RLS blocks anon reads. */
+  useEffect(() => {
+    if (!conversationId) return;
+
+    const poll = window.setInterval(() => {
+      if (pendingRef.current) return;
+      void syncFromRemote(conversationId);
+    }, 5_000);
+
+    return () => {
+      window.clearInterval(poll);
+    };
+  }, [conversationId, syncFromRemote]);
 
   /* ---------------------------------------------------------------- */
   /* Stream                                                             */
@@ -351,7 +591,12 @@ export default function HomePage() {
 
   async function streamResponse(
     res: Response
-  ): Promise<{ answer: string; connectedToAdmin?: boolean; sources?: ChatSource[] }> {
+  ): Promise<{
+    answer: string;
+    connectedToAdmin?: boolean;
+    sources?: ChatSource[];
+    silent?: boolean;
+  }> {
     const ct = res.headers.get("content-type") || "";
     const sourcesHdr =
       res.headers.get("x-snubot-sources") ?? res.headers.get("X-SNUBot-Sources");
@@ -385,6 +630,7 @@ export default function HomePage() {
         answer: (json?.answer as string | undefined) ?? "",
         connectedToAdmin: json?.needs_human === true,
         sources: jsonSources,
+        silent: json?.silent === true || json?.flow === "human_handoff",
       };
     }
 
@@ -500,6 +746,8 @@ export default function HomePage() {
         });
       } finally {
         setPending(false);
+        pendingRef.current = false;
+        if (conversationId) void syncFromRemote(conversationId);
       }
     }
   }
@@ -511,8 +759,28 @@ export default function HomePage() {
 
     setPending(true);
     setInputValue("");
-    const history: ChatMessage[] = [...messages, { role: "user", content: msg }];
-    setMessages([...history, { role: "assistant", content: "" }]);
+    if (inputRef.current) {
+      inputRef.current.style.height = "auto";
+    }
+    const history: ChatMessage[] = [
+      ...messages.filter((m) => m.role === "user" || m.role === "assistant"),
+      { role: "user", content: msg },
+    ];
+    const humanOnly = adminHandoffRef.current;
+    const optimistic: ChatMessage[] = humanOnly
+      ? [...messages, { role: "user", content: msg }]
+      : [
+          ...messages,
+          { role: "user", content: msg },
+          { role: "assistant", content: "" },
+        ];
+    setMessages(optimistic);
+    if (conversationId) {
+      syncIndexMeta(conversationId, optimistic, adminHandoff, {
+        bumpUpdatedAt: true,
+      });
+      refreshConvList();
+    }
 
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
@@ -523,17 +791,37 @@ export default function HomePage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: msg, conversation_id: conversationId, history, stream: true }),
+        body: JSON.stringify({
+          message: msg,
+          conversation_id: conversationId,
+          history,
+          // Human-handoff threads don't need streaming
+          stream: !humanOnly,
+        }),
         signal: controller.signal,
       });
 
-      let { answer, connectedToAdmin, sources } = await streamResponse(res);
+      let { answer, connectedToAdmin, sources, silent } =
+        await streamResponse(res);
 
       if (
         connectedToAdmin ||
+        silent ||
         /connected you with an admin/i.test(answer || "")
       ) {
-        notifyConnectedToAdmin();
+        if (!adminHandoffRef.current) notifyConnectedToAdmin();
+        else setAdminHandoff(true);
+      }
+
+      // Strict handoff: message logged, no bot bubble
+      if (silent || (connectedToAdmin && !answer?.trim())) {
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === "assistant" && !last.content.trim()) next.pop();
+          return next;
+        });
+        return;
       }
 
       // After 3 consecutive faculty questions, offer enrollment CTA (clickable)
@@ -565,26 +853,61 @@ export default function HomePage() {
             },
           ];
         });
+      } else {
+        // No answer — drop empty assistant placeholder
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === "assistant" && !last.content.trim()) next.pop();
+          return next;
+        });
       }
     } catch (err) {
-      const isTimeout = err instanceof Error && (err.name === "AbortError" || err.message.includes("abort"));
-      setMessages((prev) => {
-        const next = [...prev];
-        const last = next[next.length - 1];
-        const placeholder = last?.role === "assistant" && !last.content.trim();
-        const errorMsg = isTimeout
-          ? "Request timed out — please try again."
-          : "Sorry — something went wrong, please try again.";
-        if (placeholder) {
-          next[next.length - 1] = { role: "assistant", content: errorMsg };
-        } else {
-          next.push({ role: "assistant", content: errorMsg });
-        }
-        return next;
-      });
+      const isTimeout =
+        err instanceof Error &&
+        (err.name === "AbortError" || /abort/i.test(err.message));
+
+      if (isTimeout) {
+        // Drop the optimistic user + empty assistant turn; restore question for retry
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === "assistant" && !last.content.trim()) next.pop();
+          const user = next[next.length - 1];
+          if (user?.role === "user" && user.content === msg) next.pop();
+          return next;
+        });
+        setInputValue(msg);
+        requestAnimationFrame(() => {
+          const el = inputRef.current;
+          if (!el) return;
+          el.style.height = "auto";
+          el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+        });
+        toast({
+          title: "Request timed out",
+          description: "Your question is back in the input — send again when ready.",
+          variant: "error",
+        });
+      } else {
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          const placeholder = last?.role === "assistant" && !last.content.trim();
+          const errorMsg = "Sorry — something went wrong, please try again.";
+          if (placeholder) {
+            next[next.length - 1] = { role: "assistant", content: errorMsg };
+          } else {
+            next.push({ role: "assistant", content: errorMsg });
+          }
+          return next;
+        });
+      }
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
       setPending(false);
+      pendingRef.current = false;
+      if (conversationId) void syncFromRemote(conversationId);
       inputRef.current?.focus();
     }
   }
@@ -595,26 +918,49 @@ export default function HomePage() {
 
   function startNewChat() {
     const newId = crypto.randomUUID();
-    localStorage.setItem(LS_ACTIVE, JSON.stringify(newId));
-    localStorage.setItem(LS_MSG(newId),  JSON.stringify([]));
-    localStorage.setItem(LS_META(newId), JSON.stringify({ adminHandoff: false }));
-    upsertIndex({ conversation_id: newId, createdAt: Date.now(), updatedAt: Date.now(), title: "New conversation", messageCount: 0, adminHandoff: false });
-    setConversationId(newId); setMessages([]); setAdminHandoff(false);
-    setInputValue(""); setSidebarOpen(false);
+    setActiveConversationId(newId);
+    upsertIndex({
+      conversation_id: newId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      title: "New conversation",
+      messageCount: 0,
+      adminHandoff: false,
+    });
+    indexFingerprintRef.current = "";
+    setConversationId(newId);
+    setMessages([]);
+    setMessagesLoading(false);
+    setAdminHandoff(false);
+    setInputValue("");
+    setSidebarOpen(false);
     enrollCtaOffered.current = false;
+    refreshConvList();
     router.push("/");
   }
 
   function switchConversation(id: string) {
-    localStorage.setItem(LS_ACTIVE, JSON.stringify(id));
+    if (id === conversationId) {
+      setSidebarOpen(false);
+      return;
+    }
+    setActiveConversationId(id);
     setConversationId(id);
-    setMessages(loadMessages(id));
-    setAdminHandoff(loadMeta(id).adminHandoff);
+    setMessagesLoading(true);
+    setAdminHandoff(Boolean(readIndex()[id]?.adminHandoff));
     setSidebarOpen(false);
+    indexFingerprintRef.current = "";
     router.push(`/?conversation=${encodeURIComponent(id)}`);
+    void (async () => {
+      try {
+        await syncFromRemote(id, { replace: true });
+      } finally {
+        setMessagesLoading(false);
+      }
+    })();
   }
 
-  const isEmpty = messages.length === 0;
+  const isEmpty = !messagesLoading && messages.length === 0;
 
   /* ---------------------------------------------------------------- */
   /* Render                                                             */
@@ -716,7 +1062,14 @@ export default function HomePage() {
 
         {/* messages / welcome */}
         <div className="flex-1 overflow-y-auto px-4 py-6">
-          {isEmpty ? (
+          {messagesLoading ? (
+            <div className="flex h-full min-h-[12rem] items-center justify-center">
+              <p className="flex items-center gap-2 text-sm text-slate-500 font-roboto">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading conversation…
+              </p>
+            </div>
+          ) : isEmpty ? (
             /* ── Welcome screen ── */
             <div className="max-w-2xl mx-auto flex flex-col items-center text-center">
               {/* logo pill */}
@@ -740,7 +1093,16 @@ export default function HomePage() {
                   <button
                     key={label}
                     type="button"
-                    onClick={() => { setInputValue(label); inputRef.current?.focus(); }}
+                    onClick={() => {
+                      setInputValue(label);
+                      requestAnimationFrame(() => {
+                        const el = inputRef.current;
+                        if (!el) return;
+                        el.focus();
+                        el.style.height = "auto";
+                        el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+                      });
+                    }}
                     className="group flex items-center justify-between gap-3 rounded-xl bg-white border border-gray-200 px-4 py-4 text-left hover:border-sky-300 hover:shadow-sm transition-all"
                   >
                     <span className="font-roboto text-sm text-slate-700">{label}</span>
@@ -762,26 +1124,50 @@ export default function HomePage() {
                 const isLastAssistant =
                   m.role === "assistant" && idx === messages.length - 1;
                 const isTyping = isLastAssistant && pending && !m.content.trim();
+                const isUser = m.role === "user";
+                const isAdmin = m.role === "admin";
 
                 return (
                   <div
-                    key={`${idx}-${m.role}`}
-                    className={`flex items-start gap-3 ${m.role === "user" ? "flex-row-reverse" : "flex-row"}`}
+                    key={m.id ?? `${idx}-${m.role}`}
+                    className={`flex items-start gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}
                   >
-                    {m.role === "assistant" ? <BotAvatar /> : <UserAvatar />}
+                    {isAdmin ? (
+                      <AdminAvatar />
+                    ) : m.role === "assistant" ? (
+                      <BotAvatar />
+                    ) : (
+                      <UserAvatar />
+                    )}
 
                     <div
                       className={`max-w-[85%] flex flex-col gap-1 ${
-                        m.role === "user" ? "items-end" : "items-start"
+                        isUser ? "items-end" : "items-start"
                       }`}
                     >
                       <span className="text-[11px] font-semibold text-slate-400 font-roboto px-0.5">
-                        {m.role === "assistant" ? "SNUBot" : "You"}
+                        {isAdmin ? "Admin" : m.role === "assistant" ? "SNUBot" : "You"}
                       </span>
 
-                      {m.role === "user" ? (
+                      {isUser ? (
                         <div className="rounded-2xl rounded-tr-sm bg-sky-500 px-4 py-3 text-sm text-white">
                           <span className="font-roboto">{m.content}</span>
+                        </div>
+                      ) : isAdmin ? (
+                        <div className="rounded-2xl rounded-tl-sm bg-sky-600 px-4 py-3 text-sm text-white font-roboto">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              p: ({ node, ...p }) => (
+                                <p className="mb-2 last:mb-0 leading-relaxed whitespace-pre-wrap" {...p} />
+                              ),
+                              strong: ({ node, ...p }) => (
+                                <strong className="font-semibold" {...p} />
+                              ),
+                            }}
+                          >
+                            {m.content}
+                          </ReactMarkdown>
                         </div>
                       ) : (
                         <AssistantBody
@@ -812,38 +1198,32 @@ export default function HomePage() {
 
             <form
               onSubmit={(e) => { e.preventDefault(); handleSend(); }}
-              className="flex items-center gap-2 bg-white rounded-full border border-gray-200 shadow-sm px-4 py-2.5"
+              className="flex items-end gap-2 bg-white rounded-[1.75rem] border border-gray-200 shadow-sm px-3 py-2"
             >
-              {/* Enrollment trigger button */}
-              <button
-                type="button"
-                title="Start application"
-                onClick={() => {
-                  if (!enrollOpen) startEnrollmentFromCta();
-                  else setEnrollOpen(false);
-                }}
-                className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center transition-colors ${
-                  enrollOpen
-                    ? "bg-sky-100 text-sky-600"
-                    : "text-slate-400 hover:text-sky-500 hover:bg-sky-50"
-                }`}
-                aria-label="Open enrollment form"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
-
-              <input
+              <textarea
                 ref={inputRef}
-                className="flex-1 bg-transparent text-sm text-slate-800 placeholder-slate-400 outline-none font-roboto"
+                rows={1}
+                className="flex-1 max-h-40 resize-none overflow-y-auto bg-transparent px-1 py-1.5 text-sm text-slate-800 placeholder-slate-400 outline-none font-roboto leading-5"
                 placeholder="What's in your mind..."
                 value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                disabled={pending || !conversationId}
+                disabled={pending || messagesLoading || !conversationId}
+                onChange={(e) => {
+                  setInputValue(e.target.value);
+                  const el = e.target;
+                  el.style.height = "auto";
+                  el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
               />
               <button
                 type="submit"
-                disabled={pending || !conversationId || !inputValue.trim()}
-                className="shrink-0 w-8 h-8 rounded-full bg-sky-500 flex items-center justify-center text-white disabled:opacity-50 hover:bg-sky-600 transition-colors"
+                disabled={pending || messagesLoading || !conversationId || !inputValue.trim()}
+                className="shrink-0 mb-0.5 w-8 h-8 rounded-full bg-sky-500 flex items-center justify-center text-white disabled:opacity-50 hover:bg-sky-600 transition-colors"
                 aria-label="Send"
               >
                 <Send className="w-4 h-4" />

@@ -45,6 +45,61 @@ body {
 .typing-dot:nth-child(2) { animation-delay: 0.2s; }
 .typing-dot:nth-child(3) { animation-delay: 0.4s; }
 
+/* Admin login — brand panel (SNU sky / navy, not purple) */
+.login-brand-panel {
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 15%, rgba(56, 189, 248, 0.28), transparent 55%),
+    radial-gradient(ellipse 70% 50% at 85% 80%, rgba(14, 116, 144, 0.45), transparent 50%),
+    linear-gradient(155deg, #0b1f33 0%, #0c3a52 42%, #0a4a63 72%, #082536 100%);
+}
+
+.login-brand-glow {
+  background:
+    radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.06), transparent 42%);
+  animation: login-glow-pulse 7s ease-in-out infinite;
+}
+
+.login-emblem-wrap {
+  animation: login-emblem-in 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.login-brand-copy {
+  animation: login-copy-in 0.85s cubic-bezier(0.22, 1, 0.36, 1) 0.15s both;
+}
+
+.login-form-panel {
+  animation: login-form-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.08s both;
+}
+
+@keyframes login-glow-pulse {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.04); }
+}
+
+@keyframes login-emblem-in {
+  from { opacity: 0; transform: translateY(18px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes login-copy-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes login-form-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-brand-glow,
+  .login-emblem-wrap,
+  .login-brand-copy,
+  .login-form-panel {
+    animation: none;
+  }
+}
+
 @layer base {
   .theme {
     --font-heading: var(--font-sans);
@@ -74,7 +129,7 @@ body {
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    --radius: 0.625rem;
+    --radius: 0.25rem;
     --sidebar: oklch(0.985 0 0);
     --sidebar-foreground: oklch(0.145 0 0);
     --sidebar-primary: oklch(0.205 0 0);
