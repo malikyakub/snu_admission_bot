@@ -244,7 +244,8 @@ export default function AdminChatPage() {
 
   useEffect(() => {
     if (!id || !supabaseReady || !supabase) return;
-    const channel = supabase
+    const client = supabase;
+    const channel = client
       .channel(`admin-chat-${id}`)
       .on(
         "postgres_changes",
@@ -260,7 +261,7 @@ export default function AdminChatPage() {
       )
       .subscribe();
     return () => {
-      void supabase.removeChannel(channel);
+      void client.removeChannel(channel);
     };
   }, [id, reload]);
 

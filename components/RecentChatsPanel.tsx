@@ -68,7 +68,8 @@ export function RecentChatsPanel({ className }: { className?: string }) {
   useEffect(() => {
     if (!supabaseReady || !supabase) return;
 
-    const channel = supabase
+    const client = supabase;
+    const channel = client
       .channel("admin-recent-chats")
       .on(
         "postgres_changes",
@@ -93,7 +94,7 @@ export function RecentChatsPanel({ className }: { className?: string }) {
 
     return () => {
       window.clearInterval(poll);
-      void supabase.removeChannel(channel);
+      void client.removeChannel(channel);
     };
   }, [reload]);
 

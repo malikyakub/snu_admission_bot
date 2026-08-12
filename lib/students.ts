@@ -127,7 +127,7 @@ function normalizeStudentRow(row: StudentStatus & { mother_name?: string | null 
   const mothers =
     row.mothers_name?.trim() ||
     (typeof row.mother_name === "string" ? row.mother_name.trim() : "") ||
-    null;
+    undefined;
   return {
     ...row,
     mothers_name: mothers,

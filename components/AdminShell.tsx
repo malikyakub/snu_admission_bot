@@ -156,7 +156,8 @@ export function AdminShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (status !== "ok" || !supabaseReady || !supabase) return;
 
-    const channel = supabase
+    const client = supabase;
+    const channel = client
       .channel("admin-requested-chats")
       .on(
         "postgres_changes",
@@ -173,7 +174,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
 
     return () => {
       window.clearInterval(poll);
-      void supabase.removeChannel(channel);
+      void client.removeChannel(channel);
     };
   }, [status, reloadRequested]);
 
