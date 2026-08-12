@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { EnrollmentPanel } from "@/components/EnrollmentPanel";
 import { useToast } from "@/components/Toast";
-import { parseCtaContent, type CtaKind } from "@/lib/cta";
+import { parseCtaContent, ctaMarker, type CtaKind } from "@/lib/cta";
 import {
   enrollmentCtaMessage,
   enrollmentWelcomeMessage,
@@ -571,6 +571,56 @@ export default function HomePage() {
     scrollRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages.length, pending]);
 
+  /* Typing anywhere focuses the composer and keeps the first keystroke */
+  useEffect(() => {
+    function onGlobalKeyDown(e: KeyboardEvent) {
+      if (pending || messagesLoading || !conversationId || enrollOpen) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.isComposing) return;
+
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (
+          tag === "INPUT" ||
+          tag === "TEXTAREA" ||
+          tag === "SELECT" ||
+          target.isContentEditable
+        ) {
+          return;
+        }
+        if (target.closest("[role='dialog'], [data-enroll-panel]")) return;
+      }
+
+      const el = inputRef.current;
+      if (!el || el.disabled) return;
+
+      if (e.key.length === 1) {
+        e.preventDefault();
+        const next = `${el.value}${e.key}`;
+        setInputValue(next);
+        requestAnimationFrame(() => {
+          el.focus();
+          el.style.height = "auto";
+          el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+          const len = next.length;
+          try {
+            el.setSelectionRange(len, len);
+          } catch {
+            /* ignore */
+          }
+        });
+      } else if (e.key === "Backspace" && document.activeElement !== el) {
+        e.preventDefault();
+        setInputValue((v) => v.slice(0, -1));
+        requestAnimationFrame(() => el.focus());
+      }
+    }
+
+    window.addEventListener("keydown", onGlobalKeyDown);
+    return () => window.removeEventListener("keydown", onGlobalKeyDown);
+  }, [pending, messagesLoading, conversationId, enrollOpen]);
+
   /* Poll for new messages (admin replies). Prefer API over anon Realtime — RLS blocks anon reads. */
   useEffect(() => {
     if (!conversationId) return;
@@ -604,7 +654,25 @@ export default function HomePage() {
 
     if (!res.ok) {
       const detail = await res.text().catch(() => `HTTP ${res.status}`);
-      throw new Error(`Server error (${res.status}): ${detail}`);
+      let parsed: { error?: string; code?: string } | null = null;
+      try {
+        parsed = JSON.parse(detail) as { error?: string; code?: string };
+      } catch {
+        /* not JSON */
+      }
+      if (
+        res.status === 429 ||
+        parsed?.code === "rate_limit_exceeded" ||
+        /rate.?limit/i.test(detail)
+      ) {
+        throw new Error(
+          parsed?.error ||
+            "The AI service is temporarily rate-limited. Please wait a minute and try again."
+        );
+      }
+      throw new Error(
+        parsed?.error || `Server error (${res.status}): ${detail}`
+      );
     }
 
     if (!res.body) throw new Error("Empty response body");
@@ -626,8 +694,13 @@ export default function HomePage() {
             })
             .filter(Boolean)
         : headerSources;
+      let answer = (json?.answer as string | undefined) ?? "";
+      // Belts-and-braces: never keep a handoff CTA on a high-confidence turn
+      if (json?.low_confidence !== true) {
+        answer = answer.replace(/\[\[cta:handoff(?:\|[^\]]+)?\]\]/gi, "").trim();
+      }
       return {
-        answer: (json?.answer as string | undefined) ?? "",
+        answer,
         connectedToAdmin: json?.needs_human === true,
         sources: jsonSources,
         silent: json?.silent === true || json?.flow === "human_handoff",
@@ -635,6 +708,11 @@ export default function HomePage() {
     }
 
     // SSE streaming path
+    const lowConfHdr =
+      res.headers.get("x-snubot-low-confidence") ??
+      res.headers.get("X-SNUBot-Low-Confidence");
+    const streamLowConfidence = lowConfHdr === "1";
+
     const reader  = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "", assistantText = "";
@@ -673,6 +751,24 @@ export default function HomePage() {
       }
     } finally {
       reader.releaseLock();
+    }
+
+    if (!streamLowConfidence) {
+      const cleaned = assistantText
+        .replace(/\[\[cta:handoff(?:\|[^\]]+)?\]\]/gi, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+      if (cleaned !== assistantText) {
+        assistantText = cleaned;
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next.length - 1;
+          if (next[last]?.role === "assistant") {
+            next[last] = { role: "assistant", content: assistantText };
+          }
+          return next;
+        });
+      }
     }
 
     return { answer: assistantText, sources: headerSources };
@@ -868,13 +964,19 @@ export default function HomePage() {
         (err.name === "AbortError" || /abort/i.test(err.message));
 
       if (isTimeout) {
-        // Drop the optimistic user + empty assistant turn; restore question for retry
+        // Keep the failed turn visible with a talk-to-admin escape hatch;
+        // also restore the question in the input for a quick retry.
+        const timeoutMsg =
+          "That request timed out. You can try sending again, or talk to an admin.\n\n" +
+          ctaMarker("handoff", "Talk to an admin");
         setMessages((prev) => {
           const next = [...prev];
           const last = next[next.length - 1];
-          if (last?.role === "assistant" && !last.content.trim()) next.pop();
-          const user = next[next.length - 1];
-          if (user?.role === "user" && user.content === msg) next.pop();
+          if (last?.role === "assistant") {
+            next[next.length - 1] = { role: "assistant", content: timeoutMsg };
+          } else {
+            next.push({ role: "assistant", content: timeoutMsg });
+          }
           return next;
         });
         setInputValue(msg);
@@ -890,17 +992,31 @@ export default function HomePage() {
           variant: "error",
         });
       } else {
+        const detail =
+          err instanceof Error ? err.message : "Something went wrong.";
+        const rateLimited = /rate.?limit/i.test(detail);
+        const errorMsg =
+          (rateLimited
+            ? "The AI service hit a temporary rate limit. Please wait a minute and try again — or talk to an admin."
+            : "Sorry — something went wrong. Please try again, or talk to an admin.") +
+          `\n\n${ctaMarker("handoff", "Talk to an admin")}`;
         setMessages((prev) => {
           const next = [...prev];
           const last = next[next.length - 1];
           const placeholder = last?.role === "assistant" && !last.content.trim();
-          const errorMsg = "Sorry — something went wrong, please try again.";
           if (placeholder) {
             next[next.length - 1] = { role: "assistant", content: errorMsg };
           } else {
             next.push({ role: "assistant", content: errorMsg });
           }
           return next;
+        });
+        toast({
+          title: rateLimited ? "Rate limited" : "Request failed",
+          description: rateLimited
+            ? "Daily/minute AI quota was reached — retry shortly or talk to an admin."
+            : detail.slice(0, 160),
+          variant: "error",
         });
       }
     } finally {
@@ -1194,6 +1310,27 @@ export default function HomePage() {
               open={enrollOpen}
               onClose={() => setEnrollOpen(false)}
               conversationId={conversationId}
+              onComplete={({ confirmation, message }) => {
+                const content = message?.content || confirmation;
+                setMessages((prev) => {
+                  if (
+                    message?.id &&
+                    prev.some((m) => m.id === message.id)
+                  ) {
+                    return prev;
+                  }
+                  return [
+                    ...prev,
+                    {
+                      id: message?.id,
+                      role: "assistant" as const,
+                      content,
+                    },
+                  ];
+                });
+                // Close panel so the bot confirmation is visible in chat
+                setEnrollOpen(false);
+              }}
             />
 
             <form

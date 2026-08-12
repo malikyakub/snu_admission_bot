@@ -182,6 +182,21 @@ export async function markHandoffOffered(id: string): Promise<void> {
   }
 }
 
+/** Clear a pending handoff offer (decline or high-confidence follow-up). */
+export async function clearHandoffOffered(id: string): Promise<void> {
+  const supabase = getSupabase();
+  const { error } = await supabase
+    .from("conversations")
+    .update({ handoff_offered: false })
+    .eq("id", id);
+
+  if (error) {
+    throw new Error(
+      `conversations clear handoff_offered failed: ${error.message}`
+    );
+  }
+}
+
 export async function markNeedsHuman(id: string): Promise<void> {
   const supabase = getSupabase();
   const { error } = await supabase

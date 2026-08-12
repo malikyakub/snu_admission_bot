@@ -257,6 +257,8 @@ export type ChatIntent = {
   combineExamAndPlacement: boolean;
   /** User asked about yearly / annual recurring cost. */
   annualFee?: boolean;
+  /** User asked for full programme / total cost (use backend calculator). */
+  fullProgramCost?: boolean;
 };
 
 /** Explicit cost/fee language — used to override competing topic matches. */
@@ -475,6 +477,35 @@ export function isAnnualFeeQuestion(message: string): boolean {
   return /\b(yearly|annual|per\s+year|each\s+year|every\s+year|a\s+year)\b/i.test(t);
 }
 
+/**
+ * True when the user wants a full-programme / all-in total
+ * (not merely yearly recurring service fees).
+ */
+export function isFullProgramCostQuestion(message: string): boolean {
+  const t = normalizeMessage(message);
+  if (!t) return false;
+  if (isAnnualFeeQuestion(t) && !/\b(total|full|entire|whole|overall|altogether|complete)\b/i.test(t)) {
+    return false;
+  }
+
+  const comparison =
+    /\b(cheaper|cheap|cheapest|expensive|more expensive|less expensive|affordable|cost more|costs? more|cost less|costs? less|vs\.?|versus|compared? (to|with)|which (one |faculty )?(is |would be )?(cheaper|better value))\b/i.test(
+      t
+    );
+
+  const totalAsk =
+    /\b(total (cost|fee|fees|price|amount)|full (cost|price|programme|program)|entire (cost|programme|program)|whole (cost|programme|program)|overall (cost|total)|altogether|all[- ]in|complete cost|how much (in total|overall|altogether|for the (whole|entire|full))|cost of (the )?(whole|entire|full) (programme|program)|graduate[s]? cost|until graduation|through graduation)\b/i.test(
+      t
+    ) ||
+    (/\b(how much|what (is|are) the (total )?fees?|cost)\b/i.test(t) &&
+      /\b(programme|program|degree|study|studying|faculty|medicine|science|engineering|years?)\b/i.test(
+        t
+      ) &&
+      !isAnnualFeeQuestion(t));
+
+  return comparison || totalAsk;
+}
+
 /** Scan recent history (last ~2 turns) for the most recent faculty/department mention. */
 export function extractFacultyFromHistory(
   history: { role: string; content: string }[],
@@ -503,6 +534,7 @@ export function detectIntentWithHistory(
   history: { role: string; content: string }[] = []
 ): ChatIntent {
   const annualFee = isAnnualFeeQuestion(message);
+  const fullProgramCost = isFullProgramCostQuestion(message);
   let intent = detectIntent(message);
 
   // "Yearly tuition" / "annual cost" → fees topic even if patterns are weak
@@ -510,10 +542,18 @@ export function detectIntentWithHistory(
     intent = { ...intent, topic: "fees" };
   }
 
+  if (fullProgramCost && intent.topic !== "fees") {
+    intent = { ...intent, topic: "fees" };
+  }
+
   if (!intent.faculty) {
     const fromHistory = extractFacultyFromHistory(history);
     if (fromHistory) {
-      const feeSignal = intent.topic === "fees" || hasFeeCostSignal(message) || annualFee;
+      const feeSignal =
+        intent.topic === "fees" ||
+        hasFeeCostSignal(message) ||
+        annualFee ||
+        fullProgramCost;
       const followUp =
         feeSignal ||
         CONTEXTUAL_FOLLOW_UP.test(message) ||
@@ -530,12 +570,17 @@ export function detectIntentWithHistory(
     }
   }
 
-  if ((intent.topic === "fees" || annualFee) && intent.faculty) {
+  if ((intent.topic === "fees" || annualFee || fullProgramCost) && intent.faculty) {
     intent = { ...intent, combineFeesAndFaculty: true, topic: "fees" };
   }
 
   if (annualFee) {
     intent = { ...intent, annualFee: true };
+  }
+
+  if (fullProgramCost) {
+    // Full-programme totals supersede annual-only framing
+    intent = { ...intent, fullProgramCost: true, annualFee: false };
   }
 
   return intent;

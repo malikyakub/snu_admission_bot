@@ -2,6 +2,7 @@ import {
   createConversation,
   getOrCreateConversation,
   markHandoffOffered,
+  clearHandoffOffered,
   markNeedsHuman,
   setWaitingForPhone,
 } from "@/lib/conversations";
@@ -11,12 +12,18 @@ import {
   appendHandoffOffer,
   handoffConfirmMessage,
   isAffirmativeHandoff,
+  isHandoffDecline,
   isClarificationFollowUp,
   isLowConfidence,
   lastAssistantOfferedHandoff,
+  stripHandoffCta,
 } from "@/lib/handoff";
-import { detectIntent, detectIntentWithHistory } from "@/lib/intent";
+import { detectIntent, detectIntentWithHistory, extractFacultyFromHistory } from "@/lib/intent";
 import { buildMessages, type ChatHistoryMessage } from "@/lib/prompt";
+import {
+  facultiesMentionedInText,
+  formatFeeFactsBlock,
+} from "@/lib/fees";
 import {
   extractPhoneNumber,
   formatStudentStatus,
@@ -34,6 +41,7 @@ import {
 import {
   enrollmentCtaMessage,
   isEnrollInterest,
+  isEnrollInterestWithHistory,
   resolveFacultyFromMessage,
   withEnrollmentOffer,
 } from "@/lib/enrollment-intent";
@@ -64,6 +72,9 @@ export const dynamic = "force-dynamic";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+/** Used when the primary model hits daily/minute rate limits. */
+const GROQ_FALLBACK_MODEL =
+  process.env.GROQ_FALLBACK_MODEL || "llama-3.1-8b-instant";
 const TOP_K = 5;
 
 const EMPTY_INTENT = {
@@ -176,6 +187,64 @@ function mergeChunksBySimilarity(
     .slice(0, limit);
 }
 
+async function groqChatCompletions(opts: {
+  messages: ChatHistoryMessage[];
+  stream: boolean;
+  signal: AbortSignal;
+}): Promise<Response> {
+  const bodyFor = (model: string) =>
+    JSON.stringify({
+      model,
+      messages: opts.messages,
+      temperature: 0.2,
+      max_tokens: 1024,
+      stream: opts.stream,
+    });
+
+  const headers = {
+    Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+    "Content-Type": "application/json",
+  };
+
+  let res = await fetch(GROQ_URL, {
+    method: "POST",
+    headers,
+    body: bodyFor(GROQ_MODEL),
+    signal: opts.signal,
+  });
+
+  if (res.ok || res.status !== 429 || GROQ_FALLBACK_MODEL === GROQ_MODEL) {
+    return res;
+  }
+
+  const primaryDetail = await res.text().catch(() => "");
+  console.warn(
+    `[/api/chat] ${GROQ_MODEL} rate-limited; retrying with ${GROQ_FALLBACK_MODEL}`
+  );
+
+  res = await fetch(GROQ_URL, {
+    method: "POST",
+    headers,
+    body: bodyFor(GROQ_FALLBACK_MODEL),
+    signal: opts.signal,
+  });
+
+  if (!res.ok && res.status === 429) {
+    // Prefer a clean client message over dumping Groq JSON
+    return new Response(
+      JSON.stringify({
+        error:
+          "The AI service is temporarily rate-limited. Please wait a minute and try again.",
+        code: "rate_limit_exceeded",
+        detail: primaryDetail.slice(0, 400),
+      }),
+      { status: 429, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  return res;
+}
+
 /** Tee an SSE stream: forward bytes to the client while accumulating assistant text. */
 function tapSseStream(
   upstream: ReadableStream<Uint8Array>
@@ -247,6 +316,7 @@ export async function POST(req: Request) {
   // Hand-back resume must wait for a full JSON answer (no SSE).
   const wantStream = skipUserSave ? false : body.stream !== false;
   const clientIp = clientIpFromHeaders(req.headers);
+  const enrollInterest = isEnrollInterestWithHistory(message, history);
 
   async function jsonReply(
     conversationId: string | null,
@@ -366,7 +436,7 @@ export async function POST(req: Request) {
 
           // Enrollment intent: switch immediately (don't wait for a second turn)
           if (
-            isEnrollInterest(message) ||
+            enrollInterest ||
             isStartEnrollmentAffirmative(message)
           ) {
             return jsonReply(conversation?.id ?? null, message, {
@@ -542,12 +612,65 @@ export async function POST(req: Request) {
       });
     }
 
-    // --- Human handoff confirm ---
+    // --- Human handoff confirm / decline ---
     const awaitingHandoffConfirm =
       (conversation?.handoff_offered ?? false) ||
       lastAssistantOfferedHandoff(history);
 
-    if (awaitingHandoffConfirm && isAffirmativeHandoff(message)) {
+    if (awaitingHandoffConfirm && isHandoffDecline(message)) {
+      try {
+        if (conversation?.id) {
+          await clearHandoffOffered(conversation.id);
+          conversation = { ...conversation, handoff_offered: false };
+        }
+      } catch (err) {
+        console.warn(
+          "[/api/chat] clear handoff_offered:",
+          err instanceof Error ? err.message : err
+        );
+      }
+      // Fall through — student moved on; answer this message normally.
+    } else if (enrollInterest) {
+      // Prefer enrollment CTA over handoff / low-confidence RAG for "I want in"
+      const earlyIntent = detectIntentWithHistory(message, history);
+      const fac =
+        resolveFacultyFromMessage(message, earlyIntent.faculty) ||
+        extractFacultyFromHistory(history);
+      const label = fac
+        ? `Start application for ${fac}`
+        : "Start your application";
+      const answer =
+        (fac
+          ? `Great — let's get you started with **${fac}**.\n\nUse the link below to begin your application.`
+          : `Great — let's get your SNU application started.\n\nUse the link below to begin.`) +
+        `\n\n${ctaMarker("enroll", label)}`;
+
+      try {
+        if (conversation?.handoff_offered) {
+          await clearHandoffOffered(conversation.id);
+          conversation = { ...conversation, handoff_offered: false };
+        }
+      } catch {
+        /* non-fatal */
+      }
+
+      return jsonReply(conversation?.id ?? null, message, {
+        answer,
+        conversation_id: conversation?.id ?? null,
+        needs_human: false,
+        handoff_offered: false,
+        low_confidence: false,
+        top_similarity: null,
+        intent: {
+          ...EMPTY_INTENT,
+          topic: "enrollment_start",
+          faculty: fac,
+        },
+        sources: [],
+        flow: "enrollment_offer",
+        open_enrollment: false,
+      });
+    } else if (awaitingHandoffConfirm && isAffirmativeHandoff(message)) {
       let persisted = false;
       try {
         if (!conversation) {
@@ -651,40 +774,62 @@ export async function POST(req: Request) {
         : null;
     const clarificationFollowUp = isClarificationFollowUp(message, history);
     const retrievalLow = isLowConfidence(topSimilarity, chunks.length);
-    // Clarifications of a prior answer should be addressed, not refused/handed off
+    // Clarifications of a prior answer should be addressed, not refused/handed off.
+    // Evaluated fresh every turn from THIS message's retrieval — never sticky.
     const lowConfidence = retrievalLow && !clarificationFollowUp;
+
+    let feeFactsBlock: string | null = null;
+    if (intent.fullProgramCost || intent.annualFee || intent.topic === "fees") {
+      const mentioned = facultiesMentionedInText(message);
+      const faculties =
+        mentioned.length > 0
+          ? mentioned
+          : intent.faculty
+            ? [intent.faculty]
+            : null;
+      const comparison =
+        /\b(cheaper|cheap|cheapest|expensive|more expensive|affordable|vs\.?|versus|compared?)\b/i.test(
+          message
+        );
+      // Comparisons / open fee questions get the full rate table; otherwise focus.
+      feeFactsBlock = formatFeeFactsBlock(
+        comparison || !faculties || faculties.length === 0 ? null : faculties,
+        { annualFee: intent.annualFee }
+      );
+    }
 
     const messages = buildMessages(message, chunks, history, {
       lowConfidence: retrievalLow,
       annualFee: intent.annualFee,
       contextFaculty: intent.faculty,
       clarificationFollowUp,
+      feeFactsBlock,
     });
 
     const groqSignal = AbortSignal.timeout(18_000); // 18 s — below Vercel's 30 s limit
-    const groqRes = await fetch(GROQ_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: GROQ_MODEL,
-        messages,
-        temperature: 0.2,
-        max_tokens: 1024,
-        stream: wantStream,
-      }),
+    const groqRes = await groqChatCompletions({
+      messages,
+      stream: wantStream,
       signal: groqSignal,
     });
 
     if (!groqRes.ok) {
+      if (groqRes.status === 429) {
+        const payload = (await groqRes.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        return jsonError(
+          payload?.error ||
+            "The AI service is temporarily rate-limited. Please wait a minute and try again.",
+          429
+        );
+      }
       const detail = await groqRes.text();
       return jsonError(`Groq error (${groqRes.status}): ${detail}`, 502);
     }
 
     let handoffOfferedThisTurn = false;
-    if (lowConfidence && !isEnrollInterest(message)) {
+    if (lowConfidence && !enrollInterest) {
       try {
         if (!conversation) {
           conversation = await createConversation({ ipAddress: clientIp });
@@ -699,13 +844,37 @@ export async function POST(req: Request) {
           err instanceof Error ? err.message : "failed to mark handoff_offered";
         console.warn("[/api/chat] handoff_offered:", conversationError);
       }
+    } else if (conversation?.handoff_offered) {
+      // High-confidence turn: clear any stale offer so it cannot stick
+      try {
+        await clearHandoffOffered(conversation.id);
+        conversation = { ...conversation, handoff_offered: false };
+      } catch (err) {
+        console.warn(
+          "[/api/chat] clear handoff_offered:",
+          err instanceof Error ? err.message : err
+        );
+      }
     }
 
     const conversationId = conversation?.id ?? null;
 
+    /** Ensure handoff CTA only appears on THIS turn's low-confidence answers. */
+    function finalizeAnswer(raw: string): string {
+      let answer = raw || "";
+      if (enrollInterest) {
+        // enrollment suffix handled by callers that already append CTA
+        return stripHandoffCta(answer);
+      }
+      if (lowConfidence) {
+        return appendHandoffOffer(answer);
+      }
+      return stripHandoffCta(answer);
+    }
+
     if (wantStream && groqRes.body) {
       let suffix = "";
-      if (isEnrollInterest(message)) {
+      if (enrollInterest) {
         const fac = resolveFacultyFromMessage(message, intent.faculty);
         suffix = enrollmentCtaMessage(fac);
       } else if (lowConfidence) {
@@ -718,8 +887,13 @@ export async function POST(req: Request) {
         : groqRes.body;
 
       const { stream: streamOut, textPromise } = tapSseStream(withSuffix);
+      const cleanedPromise = textPromise.then((text) => {
+        if (enrollInterest) return text;
+        if (lowConfidence) return text;
+        return stripHandoffCta(text);
+      });
       // User then assistant, sequentially after the response (avoids ordering races)
-      saveUserAndAssistantWhenReady(conversationId, message, textPromise);
+      saveUserAndAssistantWhenReady(conversationId, message, cleanedPromise);
 
       return new Response(streamOut, {
         headers: {
@@ -743,11 +917,11 @@ export async function POST(req: Request) {
       choices?: { message?: { content?: string } }[];
     };
     let answer = completion.choices?.[0]?.message?.content ?? "";
-    if (isEnrollInterest(message)) {
+    if (enrollInterest) {
       const fac = resolveFacultyFromMessage(message, intent.faculty);
-      answer = withEnrollmentOffer(answer, fac);
-    } else if (lowConfidence) {
-      answer = appendHandoffOffer(answer);
+      answer = withEnrollmentOffer(stripHandoffCta(answer), fac);
+    } else {
+      answer = finalizeAnswer(answer);
     }
 
     const sourceList = sourcesFromChunks(chunks);

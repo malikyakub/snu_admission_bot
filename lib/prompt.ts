@@ -24,17 +24,20 @@ Hard rules:
 
 9. Application / enrollment questions:
    - You CAN help students enroll here in this chat via the in-app application form (the UI adds a "Start your application" link — do not invent buttons yourself).
-   - When the user asks to enroll, apply, sign up, or register, confirm that you can help them complete the SNU application in this chat and invite them to use that link. Do NOT say you cannot enroll them. Do NOT send them to an external portal as a substitute for enrolling here.
+   - When the user asks to enroll, apply, sign up, register, or says they "want in", confirm briefly and invite them to use that link. Do NOT say you cannot enroll them. Do NOT say the link will appear later or ask them to wait — the app attaches the clickable link to your message automatically.
    - Still answer how-to / requirements questions from CONTEXT (steps, documents, exam).
    - Do NOT invent clickable buttons or "click here" links — the app adds those separately.
    - Leave a blank line before any closing suggestion.
 
 10. Fee calculations — strict rules:
-   - NEVER do arithmetic yourself EXCEPT for annual/yearly recurring cost: when the user asks about yearly or annual tuition/fees, the recurring amount is $125 per semester × 2 semesters = $250 per year (service fee only; tuition is free).
-   - For one-time totals (full programme cost), use ONLY the pre-calculated totals in the CONTEXT — do not recompute those.
-   - The registration/ID fee is always $50. Never mention $55 for undergraduates.
-   - Do NOT invent fee items that are not explicitly listed in the CONTEXT (no "$30 exam fee" unless the CONTEXT includes it in the query's scope, no extra charges).
-   - When the question is about yearly/annual cost, lead with the $250/year recurring service fee; mention one-time fees only briefly if helpful.`;
+   - When a FEE_FACTS block is present below, treat it as authoritative over older CONTEXT numbers.
+   - For full-programme / total cost: calculate step-by-step from FEE_FACTS and SHOW your arithmetic (list each component, then the sum). Do not invent fee items.
+   - Components: $30 exam + $50 admin/registration (one-time, all faculties) + $350 EAP + (faculty per-semester rate × (original semesters + 2 Foundation semesters)) + ($10 × floor(totalSemesters/4) ID renewals).
+   - The Administrative Charges table values are PER-SEMESTER service fees — NOT a one-time administrative charge. They vary by faculty (Education/Sharia $50, many faculties $80, Health Sciences $100, Engineering/Medicine/Science $125). NEVER assume a flat $125/semester for every faculty.
+   - Foundation year is mandatory and adds 2 semesters charged at that faculty's own per-semester rate.
+   - For yearly/annual recurring cost only: yearly = 2 × that faculty's per-semester rate (tuition is free). If the faculty is unknown, say the yearly amount depends on the faculty's rate from the table.
+   - Never mention $55 for undergraduates. Never use outdated flat-$125-for-everyone or pre-Foundation totals from older passages.
+11. NEVER output CTA markers such as [[cta:handoff|...]] or [[cta:enroll|...]] — the app adds those separately when needed. Do not invite the user to "connect with an admin" unless CONTEXT says you lack the information AND you are refusing.`;
 
 export function buildMessages(
   userMessage: string,
@@ -45,6 +48,8 @@ export function buildMessages(
     annualFee?: boolean;
     contextFaculty?: string | null;
     clarificationFollowUp?: boolean;
+    /** Raw fee-component facts for the model to calculate from. */
+    feeFactsBlock?: string | null;
   } = {}
 ): ChatHistoryMessage[] {
   const contextBlock =
@@ -62,9 +67,14 @@ export function buildMessages(
           })
           .join("\n\n---\n\n");
 
-  const annualNote = options.annualFee
-    ? `\n\nNOTE: The user asked about yearly/annual cost. Recurring service fee = $125 per semester × 2 semesters = $250 per year. Tuition is free. One-time admission fees are separate.`
+  const feeFactsNote = options.feeFactsBlock
+    ? `\n\n${options.feeFactsBlock}\nNOTE: Prefer FEE_FACTS over any conflicting older fee passages in CONTEXT. For total-cost questions, show the step-by-step sum.`
     : "";
+
+  const annualNote =
+    options.annualFee && !options.feeFactsBlock
+      ? `\n\nNOTE: The user asked about yearly/annual cost. Yearly recurring service fee = 2 × the faculty's per-semester rate from the Administrative Charges table (not a flat $250). Tuition is free. One-time admission fees are separate.`
+      : "";
 
   const facultyNote =
     options.contextFaculty && !chunks.some((c) => c.faculty === options.contextFaculty)
@@ -87,7 +97,7 @@ export function buildMessages(
     content: `${SYSTEM_RULES}
 
 CONTEXT:
-${contextBlock}${annualNote}${facultyNote}${clarificationNote}${lowConfidenceNote}`.trim(),
+${contextBlock}${feeFactsNote}${annualNote}${facultyNote}${clarificationNote}${lowConfidenceNote}`.trim(),
   };
 
   // Drop trailing duplicate of the current user message if the client included it
@@ -101,7 +111,7 @@ ${contextBlock}${annualNote}${facultyNote}${clarificationNote}${lowConfidenceNot
 
   const recent = withoutDup.slice(-8).map((m) => ({
     role: m.role,
-    // Strip CTA markers so follow-ups read cleanly
+    // Strip CTA markers so follow-ups read cleanly and the model cannot copy them
     content: m.content.replace(/\[\[cta:[^\]]+\]\]/gi, "").trim(),
   }));
 

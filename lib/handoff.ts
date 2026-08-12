@@ -1,6 +1,8 @@
 /** Low-confidence retrieval → offer human admin handoff. */
 
-import { appendHandoffCta, hasCta } from "./cta";
+import { appendHandoffCta, hasCta, stripHandoffCta } from "./cta";
+
+export { stripHandoffCta };
 
 export const HANDOFF_SIMILARITY_THRESHOLD = Number(
   process.env.HANDOFF_SIMILARITY_THRESHOLD || 0.55
@@ -29,6 +31,7 @@ export function isAffirmativeHandoff(message: string): boolean {
     .toLowerCase();
 
   if (!t) return false;
+  if (isHandoffDecline(t)) return false;
 
   if (
     /^(y|yes|yeah|yep|yup|sure|ok|okay|please|alright|all right|of course|go ahead|do it)([.!?\s]|$)/i.test(
@@ -42,6 +45,28 @@ export function isAffirmativeHandoff(message: string): boolean {
     /\b(yes\s+please|sure\s+please|connect me|connect us|please connect|talk to (an? )?(admin|human|person|operator|someone)|speak (to|with) (an? )?(admin|human|person|operator)|get me (an? )?(admin|human)|yes[, ]+connect)\b/i.test(
       t
     )
+  );
+}
+
+/** Student declined the "Connect with an admin" offer. */
+export function isHandoffDecline(message: string): boolean {
+  const t = message
+    .normalize("NFKC")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (!t) return false;
+
+  if (
+    /^(n|no|nope|nah|no thanks|no thank you|not now|never mind|nevermind)([.!?\s]|$)/i.test(
+      t
+    )
+  ) {
+    return true;
+  }
+
+  return /\b(no need|no thanks|no thank you|not necessary|don'?t (need|want|bother)|do not (need|want)|skip (it|that|the admin)|never mind|nevermind)\b/i.test(
+    t
   );
 }
 

@@ -125,7 +125,7 @@ const ENROLLMENT_FIELD_STEPS: { step: number; fields: (keyof EnrollmentData)[] }
   { step: 4, fields: ["national_id", "nationality"] },
   { step: 5, fields: ["region", "address"] },
   { step: 6, fields: ["school_name", "school_country", "school_region_city"] },
-  { step: 7, fields: ["certificate_type", "exam_roll_number", "certificate_number"] },
+  { step: 7, fields: ["exam_roll_number"] },
   { step: 8, fields: ["faculty_choice_1"] },
   { step: 9, fields: ["faculty_choice_2", "faculty_choice_3"] },
   { step: 10, fields: ["guardian_name", "guardian_mobile", "guardian_relation"] },
