@@ -18,29 +18,58 @@ export type AdminDashboardStats = {
   studentsServed: number;
   enrollments: number;
   enrollmentByStatus: EnrollmentStatusBreakdown;
+  /** Total conversation span seconds from dashboard_time_saved. */
+  timeSavedSeconds: number;
   timeSavedMinutes: number;
+  timeSavedConversations: number;
+  timeSavedValueLabel: string;
   timeSavedLabel: string;
   traffic: TrafficPoint[];
   trafficGranularity: "day" | "hour";
 };
 
-function formatTimeSaved(studentsServed: number): {
+/** Human-friendly duration for dashboard (e.g. "10 min", "1 hr 12 min"). */
+export function formatTimeSavedFriendly(seconds: number): string {
+  const s = Math.max(0, Math.round(Number(seconds) || 0));
+  if (s < 60) {
+    return s === 1 ? "1 sec" : `${s} sec`;
+  }
+  const totalMinutes = Math.round(s / 60);
+  if (totalMinutes < 60) {
+    return totalMinutes === 1 ? "1 min" : `${totalMinutes} min`;
+  }
+  const hours = Math.floor(s / 3600);
+  const mins = Math.round((s % 3600) / 60);
+  if (mins === 0) {
+    return hours === 1 ? "1 hr" : `${hours} hr`;
+  }
+  const hourPart = hours === 1 ? "1 hr" : `${hours} hr`;
+  const minPart = mins === 1 ? "1 min" : `${mins} min`;
+  return `${hourPart} ${minPart}`;
+}
+
+/** Build display value + hint from dashboard_time_saved aggregates. */
+export function formatTimeSavedFromView(
+  totalSecondsSaved: number,
+  totalConversations: number
+): {
+  seconds: number;
   minutes: number;
+  conversations: number;
+  valueLabel: string;
   label: string;
 } {
-  const minutes = studentsServed * 15;
-  if (minutes < 60) {
-    return {
-      minutes,
-      label: `${studentsServed} student${studentsServed === 1 ? "" : "s"} served ≈ ${minutes} min saved`,
-    };
-  }
-  const hours = minutes / 60;
-  const hoursLabel =
-    hours >= 10 ? hours.toFixed(0) : hours.toFixed(hours % 1 === 0 ? 0 : 1);
+  const seconds = Math.max(0, Number(totalSecondsSaved) || 0);
+  const conversations = Math.max(0, Math.round(Number(totalConversations) || 0));
+  const valueLabel = formatTimeSavedFriendly(seconds);
+  const convLabel =
+    conversations === 1 ? "1 conversation" : `${conversations} conversations`;
   return {
-    minutes,
-    label: `${studentsServed} student${studentsServed === 1 ? "" : "s"} served ≈ ${hoursLabel} hours saved`,
+    seconds,
+    minutes: Math.round(seconds / 60),
+    conversations,
+    valueLabel,
+    label: `${valueLabel} saved across ${convLabel}`,
   };
 }
 
@@ -82,6 +111,7 @@ export async function getAdminDashboardStats(): Promise<AdminDashboardStats> {
     ipsRes,
     studentsRes,
     trafficRes,
+    timeSavedRes,
   ] = await Promise.all([
     supabase
       .from("conversations")
@@ -96,12 +126,18 @@ export async function getAdminDashboardStats(): Promise<AdminDashboardStats> {
       .select("created_at")
       .gte("created_at", since)
       .order("created_at", { ascending: true }),
+    supabase
+      .from("dashboard_time_saved")
+      .select("total_conversations, total_seconds_saved")
+      .limit(1)
+      .maybeSingle(),
   ]);
 
   if (chatsRes.error) throw new Error(chatsRes.error.message);
   if (ipsRes.error) throw new Error(ipsRes.error.message);
   if (studentsRes.error) throw new Error(studentsRes.error.message);
   if (trafficRes.error) throw new Error(trafficRes.error.message);
+  if (timeSavedRes.error) throw new Error(timeSavedRes.error.message);
 
   const chats = chatsRes.count ?? 0;
 
@@ -132,7 +168,10 @@ export async function getAdminDashboardStats(): Promise<AdminDashboardStats> {
   }
   const enrollments = studentsRes.data?.length ?? 0;
 
-  const { minutes, label } = formatTimeSaved(studentsServed);
+  const timeSaved = formatTimeSavedFromView(
+    Number(timeSavedRes.data?.total_seconds_saved ?? 0),
+    Number(timeSavedRes.data?.total_conversations ?? 0)
+  );
 
   const trafficGranularity = "hour" as const;
   const bucket = last24HourBuckets();
@@ -158,8 +197,11 @@ export async function getAdminDashboardStats(): Promise<AdminDashboardStats> {
     studentsServed,
     enrollments,
     enrollmentByStatus,
-    timeSavedMinutes: minutes,
-    timeSavedLabel: label,
+    timeSavedSeconds: timeSaved.seconds,
+    timeSavedMinutes: timeSaved.minutes,
+    timeSavedConversations: timeSaved.conversations,
+    timeSavedValueLabel: timeSaved.valueLabel,
+    timeSavedLabel: timeSaved.label,
     traffic,
     trafficGranularity,
   };

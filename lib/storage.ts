@@ -1,6 +1,6 @@
 import { getSupabase } from "./supabase";
 
-/** Document slots collected in enrollment step 13. */
+/** Document slots collected in enrollment step 11. */
 export type EnrollmentDocSlot =
   | "photo"
   | "id"

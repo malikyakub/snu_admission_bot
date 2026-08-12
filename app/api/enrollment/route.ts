@@ -1,5 +1,8 @@
 import {
+  enrollmentStatusForUpsert,
+  isEnrollmentJustSubmitted,
   loadEnrollmentByConversation,
+  TOTAL_ENROLLMENT_STEPS,
   upsertEnrollment,
   type EnrollmentData,
 } from "@/lib/enrollment";
@@ -8,9 +11,6 @@ import { getSupabase } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-/** Final student-facing enrollment step (document uploads). */
-const FINAL_ENROLLMENT_STEP = 11;
 
 function jsonErr(msg: string, status = 400) {
   return Response.json({ error: msg }, { status });
@@ -62,11 +62,22 @@ export async function POST(req: Request) {
       return Response.json({ data: record });
     }
 
-    // Default: upsert
-    await upsertEnrollment(data);
-
+    const justSubmitted = isEnrollmentJustSubmitted(data);
+    const status = enrollmentStatusForUpsert(data);
     const step = Number(data.enrollment_step ?? 0);
-    const isFinal = step >= FINAL_ENROLLMENT_STEP;
+
+    const payload: EnrollmentData = {
+      ...data,
+      enrollment_status: status,
+      ...(status === "pending_review"
+        ? {
+            needs_human: true,
+            enrollment_step: Math.max(step, TOTAL_ENROLLMENT_STEPS),
+          }
+        : {}),
+    };
+
+    await upsertEnrollment(payload);
 
     let confirmationMessage: string | null = null;
     let confirmationRow: {
@@ -76,14 +87,7 @@ export async function POST(req: Request) {
       created_at: string;
     } | null = null;
 
-    // Final step — mark for review and send bot receipt in the chat
-    if (isFinal) {
-      await upsertEnrollment({
-        ...data,
-        enrollment_status: "pending_review",
-        needs_human: true,
-      });
-
+    if (justSubmitted) {
       confirmationMessage = enrollmentReceivedConfirmationMessage({
         fullName: data.full_name,
         phone: data.phone,

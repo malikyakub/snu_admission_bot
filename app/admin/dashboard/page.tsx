@@ -183,7 +183,7 @@ export default function AdminDashboardPage() {
             Dashboard
           </h1>
           <p className="mt-1 text-sm text-slate-500 font-roboto">
-            Overview of chats, reach, enrollments, and estimated time saved.
+            Overview of chats, reach, enrollments, and time saved.
           </p>
         </div>
 
@@ -209,7 +209,7 @@ export default function AdminDashboardPage() {
               <StatCard
                 title="Students served"
                 value={stats.studentsServed}
-                hint="Distinct visitor IPs"
+                hint="Unique visitors"
                 icon={Users}
                 accent="bg-emerald-50 text-emerald-700"
               />
@@ -222,13 +222,7 @@ export default function AdminDashboardPage() {
               />
               <StatCard
                 title="Time saved"
-                value={
-                  stats.timeSavedMinutes >= 60
-                    ? `${(stats.timeSavedMinutes / 60).toFixed(
-                        stats.timeSavedMinutes % 60 === 0 ? 0 : 1
-                      )}h`
-                    : `${stats.timeSavedMinutes}m`
-                }
+                value={stats.timeSavedValueLabel}
                 hint={stats.timeSavedLabel}
                 icon={Clock3}
                 accent="bg-teal-50 text-teal-700"

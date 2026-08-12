@@ -1,10 +1,13 @@
 import { getSupabase } from "./supabase";
 
+/** Student-facing enrollment steps (campus / exam are admin-only). */
+export const TOTAL_ENROLLMENT_STEPS = 11;
+
 export type EnrollmentData = {
   // step 1
   full_name?: string;
-  // step 2
   mothers_name?: string;
+  // step 2
   phone?: string;
   // step 3
   gender?: string;
@@ -24,20 +27,19 @@ export type EnrollmentData = {
   certificate_type?: string;
   exam_roll_number?: string;
   certificate_number?: string;
-  // step 8
+  // admin-only (not collected in student flow)
   study_campus?: string;
   exam_location?: string;
-  // step 9
+  // step 8
   faculty_choice_1?: string;
-  // step 10
+  // step 9
   faculty_choice_2?: string;
-  // step 11
   faculty_choice_3?: string;
-  // step 12
+  // step 10
   guardian_name?: string;
   guardian_mobile?: string;
   guardian_relation?: string;
-  // step 13 — URLs after upload
+  // step 11 — URLs after upload
   doc_photo_url?: string;
   doc_id_url?: string;
   doc_certificate_url?: string;
@@ -164,6 +166,68 @@ export function isEnrollmentIncomplete(data: EnrollmentData): boolean {
   return nextIncompleteEnrollmentStep(data) != null;
 }
 
+/** True when the student-facing application is finished (ready for admin review). */
+export function isEnrollmentSubmitted(data: {
+  enrollment_step?: number | null;
+  enrollment_status?: string | null;
+} & Partial<EnrollmentData>): boolean {
+  const status = (data.enrollment_status || "").trim().toLowerCase();
+  if (
+    status === "pending_review" ||
+    status === "under_review" ||
+    status === "submitted" ||
+    status === "approved" ||
+    status === "accepted" ||
+    status === "enrolled" ||
+    status === "rejected" ||
+    status === "declined"
+  ) {
+    return true;
+  }
+  const step = Number(data.enrollment_step ?? 0);
+  if (step >= TOTAL_ENROLLMENT_STEPS) return true;
+  return nextIncompleteEnrollmentStep(data as EnrollmentData) == null;
+}
+
+const TERMINAL_STATUSES = new Set([
+  "approved",
+  "accepted",
+  "enrolled",
+  "rejected",
+  "declined",
+]);
+
+const REVIEW_STATUSES = new Set([
+  "pending_review",
+  "under_review",
+  "submitted",
+]);
+
+/** Status to persist for a student upsert, given incoming payload. */
+export function enrollmentStatusForUpsert(data: EnrollmentData): string {
+  const prior = (data.enrollment_status || "").trim().toLowerCase();
+  if (TERMINAL_STATUSES.has(prior)) return prior;
+  if (REVIEW_STATUSES.has(prior)) return prior === "submitted" ? "pending_review" : prior;
+
+  const step = Number(data.enrollment_step ?? 0);
+  const complete =
+    step >= TOTAL_ENROLLMENT_STEPS ||
+    nextIncompleteEnrollmentStep(data) == null;
+  if (complete) return "pending_review";
+  return prior || "in_progress";
+}
+
+/** True when this upsert is the transition into under-review. */
+export function isEnrollmentJustSubmitted(data: EnrollmentData): boolean {
+  const prior = (data.enrollment_status || "").trim().toLowerCase();
+  if (TERMINAL_STATUSES.has(prior) || REVIEW_STATUSES.has(prior)) return false;
+  const step = Number(data.enrollment_step ?? 0);
+  return (
+    step >= TOTAL_ENROLLMENT_STEPS ||
+    nextIncompleteEnrollmentStep(data) == null
+  );
+}
+
 export const TIER_1_FACULTIES = [
   "Medicine and Surgery",
   "Science",
@@ -192,15 +256,17 @@ export function isTier1(faculty: string): boolean {
   return (TIER_1_FACULTIES as readonly string[]).includes(faculty);
 }
 
-/** Returns allowed choices for choice 2/3 given what's already been picked. */
+/** Returns allowed faculties for a choice slot.
+ *  Tier 1 programs (Medicine, Science, Engineering, Economic & Management)
+ *  may only be selected as 1st choice — never as 2nd or 3rd.
+ */
 export function allowedFaculties(
-  chosen: string[],
-  allChosen: string[]
+  alreadyChosen: string[],
+  slot: 1 | 2 | 3 = 2
 ): Faculty[] {
-  const hasT1 = allChosen.some(isTier1);
   return ALL_FACULTIES.filter((f) => {
-    if (chosen.includes(f)) return false; // already picked
-    if (hasT1 && isTier1(f)) return false; // already used T1 slot
+    if (alreadyChosen.includes(f)) return false;
+    if (slot > 1 && isTier1(f)) return false;
     return true;
   });
 }

@@ -10,6 +10,10 @@ const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 export const metadata: Metadata = {
   title: "SNUBot",
   description: "Somali National University admissions assistant",
+  icons: {
+    icon: "/snu-emblem.png",
+    apple: "/snu-emblem.png",
+  },
 };
 
 export default function RootLayout({
