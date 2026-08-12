@@ -68,3 +68,12 @@ export function appendHandoffCta(answer: string, label?: string): string {
   }
   return `${trimmed}\n\n${ctaMarker("handoff", label)}`;
 }
+
+/** Remove handoff CTA markers (and nothing else). */
+export function stripHandoffCta(content: string): string {
+  return (content || "")
+    .replace(/\[\[cta:handoff(?:\|[^\]]+)?\]\]/gi, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}

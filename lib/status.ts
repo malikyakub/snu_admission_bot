@@ -6,6 +6,7 @@ import {
   nextIncompleteEnrollmentStep,
   type EnrollmentData,
 } from "./enrollment";
+import { isEnrollInterest } from "./enrollment-intent";
 import { normalizePhoneDigits } from "./students";
 
 const GREETING_PATTERNS: RegExp[] = [
@@ -46,8 +47,16 @@ const ASK_FOR_PHONE =
 
 const START_ENROLLMENT_OFFER =
   "I couldn't find an application under that phone number.\n\n" +
-  "You can try again with or without the country code (e.g. `61…` or `+252 61…`).\n\n" +
+  "You can send another number if you used a different one, or start a new application.\n\n" +
   `[[cta:enroll|Start a new application]]`;
+
+const TOPIC_CHANGE_PATTERNS: RegExp[] = [
+  /\b(never\s*mind|forget\s*(it|that)|cancel|skip|stop|something\s+else|different\s+(question|topic))\b/i,
+  /\b(what|how|when|where|which|who)\b.+\b(about|is|are|do|does|can|should)\b/i,
+  /\b(tell\s+me|explain|describe|list|show\s+me)\b/i,
+  /\b(options?|facult(y|ies)|programmes?|programs?|fees?|tuition|requirements?|documents?|exam|admission|campus|course)\b/i,
+  /\b(let'?s|we('?ll|\s+will)|i\s+want\s+to|i'?d\s+like\s+to)\b.+\b(enroll|enrol|apply|application|start)\b/i,
+];
 
 export function isStatusCheckIntent(message: string): boolean {
   const t = message.normalize("NFKC").replace(/\s+/g, " ").trim();
@@ -59,7 +68,7 @@ export function isStatusCheckIntent(message: string): boolean {
 
 /**
  * Extract a phone-like token from free text.
- * Handles: 613673734, +252613673734, +252 613673734, "what about +252…"
+ * Handles: 613673734, +252613673734, 252613673734, +252 613673734, "what about +252…"
  */
 export function extractPhoneNumber(message: string): string | null {
   const t = message.normalize("NFKC").trim();
@@ -85,14 +94,45 @@ export function extractPhoneNumber(message: string): string | null {
   return null;
 }
 
+/**
+ * True when the student is leaving the status-check phone wait
+ * (new enrollment, KB question, cancel, etc.) — not sending a phone.
+ */
+export function shouldExitPhoneWait(message: string): boolean {
+  const t = message.normalize("NFKC").replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  if (extractPhoneNumber(t)) return false;
+  if (isStatusCheckIntent(t)) return false;
+
+  if (isEnrollInterest(t)) return true;
+  if (isStartEnrollmentAffirmative(t)) return true;
+
+  if (
+    TOPIC_CHANGE_PATTERNS.some((p) => {
+      p.lastIndex = 0;
+      return p.test(t);
+    })
+  ) {
+    return true;
+  }
+
+  // Longer free-form that isn't phone-shaped
+  if (t.length >= 28 && !/^[\d\s+\-().]+$/.test(t)) return true;
+
+  return false;
+}
+
+/** Only the initial "please reply with the phone number" ask — not the not-found offer. */
 export function lastAssistantAskedForPhone(
   history: { role: string; content: string }[]
 ): boolean {
   for (let i = history.length - 1; i >= 0; i--) {
     if (history[i].role === "assistant") {
-      return /phone number you used on your application|try again with or without the country code/i.test(
-        history[i].content
-      );
+      const c = history[i].content;
+      if (/couldn't find an application under that phone number/i.test(c)) {
+        return false;
+      }
+      return /phone number you used on your application/i.test(c);
     }
   }
   return false;
@@ -117,7 +157,9 @@ export function statusAskForPhoneMessage(): string {
 }
 
 /** Human-readable enrollment status for chat replies. */
-export function formatEnrollmentStatusLabel(raw: string | null | undefined): string {
+export function formatEnrollmentStatusLabel(
+  raw: string | null | undefined
+): string {
   const key = (raw ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
   if (!key) return "In progress";
 
@@ -144,7 +186,6 @@ export function formatEnrollmentStatusLabel(raw: string | null | undefined): str
 
   if (labels[key]) return labels[key];
 
-  // Fallback: pending_review → Pending review
   return key
     .split("_")
     .filter(Boolean)
@@ -206,6 +247,16 @@ export function isStartEnrollmentAffirmative(message: string): boolean {
   ) {
     return true;
   }
+  if (
+    /\b(start|begin|let'?s|we('?ll)?)\s+(\w+\s+){0,3}(the\s+)?(enrollment|enrolling|application|applying)\b/i.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  if (/\b(let'?s|we('?ll|\s+will))\s+(enroll|apply|sign\s*up)\b/i.test(t)) {
+    return true;
+  }
   return /\b(start (the )?enrollment|begin (the )?enrollment|enroll( me)?|sign ?up|continue (my |the )?application)\b/i.test(
     t
   );
@@ -218,7 +269,11 @@ export function lastAssistantOfferedStartEnrollment(
     if (history[i].role === "assistant") {
       return (
         /\[\[cta:enroll/i.test(history[i].content) ||
-        /start the enrollment process/i.test(history[i].content)
+        /start the enrollment process/i.test(history[i].content) ||
+        /start a new application/i.test(history[i].content) ||
+        /couldn't find an application under that phone number/i.test(
+          history[i].content
+        )
       );
     }
     if (history[i].role === "user") break;

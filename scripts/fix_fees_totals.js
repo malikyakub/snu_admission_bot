@@ -80,7 +80,7 @@ const SUMMARY_CONTENT =
   "- Semester service fee: $125 per semester (ongoing, 2 semesters per year)\n" +
   "- ID card renewal: $20 (once during a 4-year programme)\n" +
   "Pre-calculated totals for a full programme (most common 4-year example):\n" +
-  "Science / Engineering / Medicine & Surgery (admin $125, 4 years = 8 semesters): " +
+  "Science / Engineering (admin $125, 4 years = 8 semesters): " +
   "$30 + $50 + $125 + $350 + $1,000 + $20 = $1,575\n" +
   "Agriculture, Economic & Management, Languages, Law, Social Science, Vet Medicine (admin $80, 4 years): " +
   "$30 + $50 + $80 + $350 + $1,000 + $20 = $1,530\n" +
@@ -88,12 +88,14 @@ const SUMMARY_CONTENT =
   "$30 + $50 + $50 + $350 + $1,000 + $20 = $1,500\n" +
   "Health Sciences & Tropical Medicine (admin $100, 4 years): " +
   "$30 + $50 + $100 + $350 + $1,000 + $20 = $1,550\n" +
+  "Medicine & Surgery is a 6-year programme only (not 4 years).\n" +
   "Medicine & Surgery (admin $125, 6 years = 12 semesters): " +
   "$30 + $50 + $125 + $350 + $1,500 + $40 = $2,095\n" +
   "Veterinary Medicine and Animal Husbandry (admin $80, 5 years = 10 semesters): " +
   "$30 + $50 + $80 + $350 + $1,250 + $30 = $1,790\n" +
   "IMPORTANT: Use these pre-calculated totals. Do NOT invent other fee items. " +
-  "The correct total for Science (including Computer Science) is $1,575 for a 4-year programme.";
+  "The correct total for Science (including Computer Science) is $1,575 for a 4-year programme. " +
+  "The correct total for Medicine & Surgery is $2,095 for the 6-year programme only.";
 
 const ID_RENEWAL_CONTENT =
   "SNU students in every faculty must renew their student ID card every 2 years for a $20 fee. " +

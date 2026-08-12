@@ -22,7 +22,7 @@ export function normalizePhoneDigits(raw: string): string {
   if (d.length === 9 && d.startsWith("6")) {
     d = `252${d}`;
   }
-  // already 252…
+  // 252 + local without separator already fine (e.g. 252612544819)
   return d;
 }
 
@@ -37,13 +37,17 @@ export function phoneVariants(raw: string): string[] {
   if (rawDigits) {
     variants.add(rawDigits);
     variants.add(`+${rawDigits}`);
+    if (rawDigits.startsWith("00")) {
+      variants.add(rawDigits.slice(2));
+      variants.add(`+${rawDigits.slice(2)}`);
+    }
   }
 
   if (digits) {
     variants.add(digits);
     variants.add(`+${digits}`);
     if (digits.startsWith("252") && digits.length >= 12) {
-      const local = digits.slice(3);
+      const local = digits.slice(3); // e.g. 612544819
       variants.add(local);
       variants.add(`0${local}`);
       variants.add(`252${local}`);
@@ -51,11 +55,19 @@ export function phoneVariants(raw: string): string[] {
       variants.add(`+252 ${local}`);
       variants.add(`+252-${local}`);
       variants.add(`252 ${local}`);
-      // spaced groups e.g. +252 61 3673734
+      variants.add(`252-${local}`);
+      // spaced groups e.g. +252 61 2544819
       if (local.length >= 2) {
         variants.add(`+252 ${local.slice(0, 2)} ${local.slice(2)}`);
         variants.add(`+252 ${local.slice(0, 2)}${local.slice(2)}`);
+        variants.add(`252 ${local.slice(0, 2)} ${local.slice(2)}`);
+        variants.add(`${local.slice(0, 2)} ${local.slice(2)}`);
       }
+    } else if (digits.length >= 9 && digits.startsWith("6")) {
+      // Local mobile without country code
+      variants.add(`252${digits}`);
+      variants.add(`+252${digits}`);
+      variants.add(`0${digits}`);
     }
   }
 
@@ -115,7 +127,7 @@ function normalizeStudentRow(row: StudentStatus & { mother_name?: string | null 
   const mothers =
     row.mothers_name?.trim() ||
     (typeof row.mother_name === "string" ? row.mother_name.trim() : "") ||
-    null;
+    undefined;
   return {
     ...row,
     mothers_name: mothers,

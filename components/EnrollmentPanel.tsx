@@ -11,18 +11,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ChevronRight, Loader2, Paperclip, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Paperclip, X } from "lucide-react";
 import { DatePartsInput } from "@/components/DatePartsInput";
 import { PhoneInput } from "@/components/PhoneInput";
 import {
   ALL_FACULTIES,
   allowedFaculties,
-  EXAM_LOCATIONS,
-  STUDY_CAMPUSES,
+  isEnrollmentIncomplete,
+  isEnrollmentSubmitted,
+  TOTAL_ENROLLMENT_STEPS,
   type EnrollmentData,
+  type Faculty,
 } from "@/lib/enrollment";
+import { enrollmentReceivedConfirmationMessage } from "@/lib/enrollment-intent";
 
-const TOTAL_STEPS = 13;
+const TOTAL_STEPS = TOTAL_ENROLLMENT_STEPS;
 
 /* ------------------------------------------------------------------ */
 /* Types                                                                 */
@@ -37,6 +40,7 @@ interface StepProps {
   data: EnrollmentData;
   onSubmit: StepSubmitFn;
   onCancel: () => void;
+  onBack?: () => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -57,6 +61,7 @@ function StepShell({
   title,
   children,
   onSubmit,
+  onBack,
   loading,
   valid,
 }: {
@@ -64,24 +69,48 @@ function StepShell({
   title: string;
   children: React.ReactNode;
   onSubmit: () => void;
+  onBack?: () => void;
   loading: boolean;
   valid: boolean;
 }) {
   return (
-    <div className="flex flex-col gap-4">
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!valid || loading) return;
+        onSubmit();
+      }}
+    >
       <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
         <span className="flex items-center justify-center w-6 h-6 rounded-full bg-sky-100 text-sky-700 text-xs font-bold shrink-0">
           {step}
         </span>
         <p className="text-sm font-semibold text-slate-800">{title}</p>
-        <span className="ml-auto text-xs text-slate-400">Step {step} of {TOTAL_STEPS}</span>
+        <div className="ml-auto flex items-center gap-0.5">
+          {onBack && step > 1 ? (
+            <button
+              type="button"
+              onClick={onBack}
+              disabled={loading}
+              className="rounded-md p-0.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40"
+              aria-label="Previous step"
+              title="Back"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+          ) : null}
+          <span className="text-xs text-slate-400">
+            Step {step} of {TOTAL_STEPS}
+          </span>
+        </div>
       </div>
       <div className="flex flex-col gap-3">{children}</div>
       <div className="flex justify-end pt-1">
         <Button
+          type="submit"
           className="bg-sky-600 hover:bg-sky-700 text-white px-5"
           disabled={!valid || loading}
-          onClick={onSubmit}
         >
           {loading ? (
             <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
@@ -91,22 +120,22 @@ function StepShell({
           {step === TOTAL_STEPS ? "Submit Application" : "Next"}
         </Button>
       </div>
-    </div>
+    </form>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* Steps 1–13                                                           */
+/* Steps 1–11                                                           */
 /* ------------------------------------------------------------------ */
 
-function Step1({ data, onSubmit }: StepProps) {
+function Step1({ data, onSubmit, onBack }: StepProps) {
   const [fullName, setFullName] = useState(data.full_name ?? "");
   const [mothersName, setMothersName] = useState(data.mothers_name ?? "");
   const [loading, setLoading] = useState(false);
   const valid = fullName.trim().length >= 2 && mothersName.trim().length >= 2;
 
   return (
-    <StepShell step={1} title="Your name & mother's name" onSubmit={async () => {
+    <StepShell step={1} title="Your name & mother's name" onBack={onBack} onSubmit={async () => {
       setLoading(true);
       await onSubmit(
         { full_name: fullName.trim(), mothers_name: mothersName.trim() },
@@ -129,7 +158,7 @@ function Step1({ data, onSubmit }: StepProps) {
   );
 }
 
-function Step2({ data, onSubmit }: StepProps) {
+function Step2({ data, onSubmit, onBack }: StepProps) {
   const [phone, setPhone] = useState(data.phone ?? "");
   const [loading, setLoading] = useState(false);
   const [phoneError, setPhoneError] = useState("");
@@ -142,7 +171,7 @@ function Step2({ data, onSubmit }: StepProps) {
   }
 
   return (
-    <StepShell step={2} title="Phone number" onSubmit={async () => {
+    <StepShell step={2} title="Phone number" onBack={onBack} onSubmit={async () => {
       if (!isValidPhone(phone)) { setPhoneError("Valid phone required"); return; }
       setLoading(true);
       await onSubmit({ phone: phone.trim() }, `Phone: ${phone.trim()}`);
@@ -165,7 +194,7 @@ function Step2({ data, onSubmit }: StepProps) {
   );
 }
 
-function Step3({ data, onSubmit }: StepProps) {
+function Step3({ data, onSubmit, onBack }: StepProps) {
   const [gender, setGender] = useState(data.gender ?? "");
   const [dob, setDob] = useState<string | null>(data.date_of_birth ?? null);
   const [placeOfBirth, setPlaceOfBirth] = useState(data.place_of_birth ?? "");
@@ -173,7 +202,7 @@ function Step3({ data, onSubmit }: StepProps) {
   const valid = !!gender && !!dob && placeOfBirth.trim().length >= 2;
 
   return (
-    <StepShell step={3} title="Gender, date of birth & place of birth" onSubmit={async () => {
+    <StepShell step={3} title="Gender, date of birth & place of birth" onBack={onBack} onSubmit={async () => {
       if (!dob) return;
       setLoading(true);
       await onSubmit({ gender, date_of_birth: dob, place_of_birth: placeOfBirth.trim() },
@@ -212,14 +241,14 @@ function Step3({ data, onSubmit }: StepProps) {
   );
 }
 
-function Step4({ data, onSubmit }: StepProps) {
+function Step4({ data, onSubmit, onBack }: StepProps) {
   const [nationalId, setNationalId] = useState(data.national_id ?? "");
   const [nationality, setNationality] = useState(data.nationality ?? "");
   const [loading, setLoading] = useState(false);
   const valid = nationalId.trim().length >= 3 && nationality.trim().length >= 2;
 
   return (
-    <StepShell step={4} title="National ID / passport & nationality" onSubmit={async () => {
+    <StepShell step={4} title="National ID / passport & nationality" onBack={onBack} onSubmit={async () => {
       setLoading(true);
       await onSubmit({ national_id: nationalId.trim(), nationality: nationality.trim() },
         `National ID: ${nationalId.trim()}, Nationality: ${nationality.trim()}`);
@@ -239,14 +268,14 @@ function Step4({ data, onSubmit }: StepProps) {
   );
 }
 
-function Step5({ data, onSubmit }: StepProps) {
+function Step5({ data, onSubmit, onBack }: StepProps) {
   const [region, setRegion] = useState(data.region ?? "");
   const [address, setAddress] = useState(data.address ?? "");
   const [loading, setLoading] = useState(false);
   const valid = region.trim().length >= 2 && address.trim().length >= 3;
 
   return (
-    <StepShell step={5} title="Current region & address" onSubmit={async () => {
+    <StepShell step={5} title="Current region & address" onBack={onBack} onSubmit={async () => {
       setLoading(true);
       await onSubmit({ region: region.trim(), address: address.trim() },
         `Region: ${region.trim()}, Address: ${address.trim()}`);
@@ -266,7 +295,7 @@ function Step5({ data, onSubmit }: StepProps) {
   );
 }
 
-function Step6({ data, onSubmit }: StepProps) {
+function Step6({ data, onSubmit, onBack }: StepProps) {
   const [schoolName, setSchoolName] = useState(data.school_name ?? "");
   const [schoolCountry, setSchoolCountry] = useState(data.school_country ?? "");
   const [schoolCity, setSchoolCity] = useState(data.school_region_city ?? "");
@@ -274,7 +303,7 @@ function Step6({ data, onSubmit }: StepProps) {
   const valid = schoolName.trim().length >= 2 && schoolCountry.trim().length >= 2 && schoolCity.trim().length >= 2;
 
   return (
-    <StepShell step={6} title="Secondary school details" onSubmit={async () => {
+    <StepShell step={6} title="Secondary school details" onBack={onBack} onSubmit={async () => {
       setLoading(true);
       await onSubmit({ school_name: schoolName.trim(), school_country: schoolCountry.trim(), school_region_city: schoolCity.trim() },
         `School: ${schoolName.trim()}, Country: ${schoolCountry.trim()}, City: ${schoolCity.trim()}`);
@@ -299,94 +328,64 @@ function Step6({ data, onSubmit }: StepProps) {
   );
 }
 
-function Step7({ data, onSubmit }: StepProps) {
-  const [certType, setCertType] = useState(data.certificate_type ?? "");
+function Step7({ data, onSubmit, onBack }: StepProps) {
   const [rollNo, setRollNo] = useState(data.exam_roll_number ?? "");
   const [certNo, setCertNo] = useState(data.certificate_number ?? "");
   const [loading, setLoading] = useState(false);
-  const valid = !!certType && rollNo.trim().length >= 2 && certNo.trim().length >= 2;
-
-  const certTypes = [
-    "Somali Secondary School Certificate (SSSC)",
-    "National Exam Certificate",
-    "O-Level / IGCSE",
-    "Other Recognized Certificate",
-  ];
+  const valid = rollNo.trim().length >= 2;
+  const rollYearPrefix = String(new Date().getFullYear()).slice(-2);
 
   return (
-    <StepShell step={7} title="Certificate & exam numbers" onSubmit={async () => {
+    <StepShell step={7} title="Exam roll & certificate number" onBack={onBack} onSubmit={async () => {
       setLoading(true);
-      await onSubmit({ certificate_type: certType, exam_roll_number: rollNo.trim(), certificate_number: certNo.trim() },
-        `Certificate: ${certType}, Roll #: ${rollNo.trim()}, Cert #: ${certNo.trim()}`);
+      const roll = rollNo.trim();
+      const cert = certNo.trim();
+      await onSubmit(
+        {
+          exam_roll_number: roll,
+          certificate_number: cert || undefined,
+        },
+        cert
+          ? `Exam roll #: ${roll}, Certificate #: ${cert}`
+          : `Exam roll #: ${roll}`
+      );
       setLoading(false);
     }} loading={loading} valid={valid}>
       <div className="grid gap-1.5">
-        <Label>Certificate type</Label>
-        <Select value={certType} onValueChange={v => setCertType(v ?? "")}>
-          <SelectTrigger className="h-10 w-full">
-            <SelectValue placeholder="Select certificate type" />
-          </SelectTrigger>
-          <SelectContent>
-            {certTypes.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <Label htmlFor="s7-roll">Exam roll number</Label>
+        <Input
+          id="s7-roll"
+          placeholder={`e.g. ${rollYearPrefix}912829`}
+          value={rollNo}
+          onChange={(e) => setRollNo(e.target.value)}
+          autoFocus
+        />
       </div>
       <div className="grid gap-1.5">
-        <Label htmlFor="s7-roll">Secondary exam roll number</Label>
-        <Input id="s7-roll" placeholder="e.g. 2024/001234" value={rollNo}
-          onChange={e => setRollNo(e.target.value)} />
-      </div>
-      <div className="grid gap-1.5">
-        <Label htmlFor="s7-cert">Secondary certificate number</Label>
-        <Input id="s7-cert" placeholder="e.g. SSSC-2024-5678" value={certNo}
-          onChange={e => setCertNo(e.target.value)} />
+        <Label htmlFor="s7-cert">
+          Certificate number{" "}
+          <span className="font-normal text-slate-400">(optional)</span>
+        </Label>
+        <Input
+          id="s7-cert"
+          placeholder="e.g. 123456"
+          inputMode="numeric"
+          maxLength={6}
+          value={certNo}
+          onChange={(e) => setCertNo(e.target.value.replace(/\D/g, "").slice(0, 6))}
+        />
       </div>
     </StepShell>
   );
 }
 
-function Step8({ data, onSubmit }: StepProps) {
-  const [campus, setCampus] = useState(data.study_campus ?? "");
-  const [examLoc, setExamLoc] = useState(data.exam_location ?? "");
-  const [loading, setLoading] = useState(false);
-  const valid = !!campus && !!examLoc;
-
-  return (
-    <StepShell step={8} title="Preferred campus & exam location" onSubmit={async () => {
-      setLoading(true);
-      await onSubmit({ study_campus: campus, exam_location: examLoc },
-        `Campus: ${campus}, Exam location: ${examLoc}`);
-      setLoading(false);
-    }} loading={loading} valid={valid}>
-      <div className="grid gap-1.5">
-        <Label>Study campus</Label>
-        <Select value={campus} onValueChange={v => setCampus(v ?? "")}>
-          <SelectTrigger className="h-10 w-full"><SelectValue placeholder="Select campus" /></SelectTrigger>
-          <SelectContent>
-            {STUDY_CAMPUSES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="grid gap-1.5">
-        <Label>Exam location</Label>
-        <Select value={examLoc} onValueChange={v => setExamLoc(v ?? "")}>
-          <SelectTrigger className="h-10 w-full"><SelectValue placeholder="Select exam location" /></SelectTrigger>
-          <SelectContent>
-            {EXAM_LOCATIONS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>
-    </StepShell>
-  );
-}
-
-function Step9({ data, onSubmit }: StepProps) {
+function Step8({ data, onSubmit, onBack }: StepProps) {
   const [choice, setChoice] = useState(data.faculty_choice_1 ?? "");
   const [loading, setLoading] = useState(false);
   const valid = !!choice;
 
   return (
-    <StepShell step={9} title="First faculty choice" onSubmit={async () => {
+    <StepShell step={8} title="First faculty choice" onBack={onBack} onSubmit={async () => {
       setLoading(true);
       await onSubmit({ faculty_choice_1: choice }, `First choice faculty: ${choice}`);
       setLoading(false);
@@ -401,73 +400,121 @@ function Step9({ data, onSubmit }: StepProps) {
         </Select>
       </div>
       <p className="text-xs text-slate-500">
-        Note: Medicine & Surgery, Science, Engineering, and Economic & Management Science are Tier 1 — you may only pick one Tier 1 faculty across all three choices.
+        Note: Medicine &amp; Surgery, Science, Engineering, and Economic &amp;
+        Management Science are Tier 1 — they can only be your{" "}
+        <strong>1st choice</strong>, and you may pick only one of them.
       </p>
     </StepShell>
   );
 }
 
-function Step10({ data, onSubmit }: StepProps) {
-  const [choice, setChoice] = useState(data.faculty_choice_2 ?? "");
+function Step9({ data, onSubmit, onBack }: StepProps) {
+  const firstChoice = data.faculty_choice_1 ?? "";
+  const first = firstChoice ? [firstChoice] : [];
+  const allowed2 = allowedFaculties(first, 2);
+
+  const [choice2, setChoice2] = useState(() => {
+    const initial = data.faculty_choice_2 ?? "";
+    return allowedFaculties(first, 2).includes(initial as Faculty) ? initial : "";
+  });
+  const [choice3, setChoice3] = useState(() => {
+    const initial = data.faculty_choice_3 ?? "";
+    const seed2 = data.faculty_choice_2 ?? "";
+    const chosen = [...first, seed2].filter(Boolean) as string[];
+    return allowedFaculties(chosen, 3).includes(initial as Faculty) ? initial : "";
+  });
   const [loading, setLoading] = useState(false);
-  const valid = !!choice;
-  const choices1 = data.faculty_choice_1 ? [data.faculty_choice_1] : [];
-  const allowed = allowedFaculties(choices1, choices1);
+
+  const chosenFor3 = [...first, choice2].filter(Boolean) as string[];
+  const allowed3 = allowedFaculties(chosenFor3, 3);
+
+  // Clear invalid picks if first choice / tier rules exclude them
+  useEffect(() => {
+    if (choice2 && !allowedFaculties(first, 2).includes(choice2 as Faculty)) {
+      setChoice2("");
+    }
+  }, [firstChoice, choice2]); // eslint-disable-line react-hooks/exhaustive-deps -- first derived from firstChoice
+
+  useEffect(() => {
+    const allowed = allowedFaculties(
+      [...first, choice2].filter(Boolean) as string[],
+      3
+    );
+    if (choice3 && !allowed.includes(choice3 as Faculty)) {
+      setChoice3("");
+    }
+  }, [firstChoice, choice2, choice3]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const valid =
+    !!choice2 &&
+    !!choice3 &&
+    choice2 !== choice3 &&
+    allowed2.includes(choice2 as Faculty) &&
+    allowed3.includes(choice3 as Faculty);
 
   return (
-    <StepShell step={10} title="Second faculty choice" onSubmit={async () => {
-      setLoading(true);
-      await onSubmit({ faculty_choice_2: choice }, `Second choice faculty: ${choice}`);
-      setLoading(false);
-    }} loading={loading} valid={valid}>
-      <div className="grid gap-1.5">
-        <Label>Faculty (2nd choice)</Label>
-        <Select value={choice} onValueChange={v => setChoice(v ?? "")}>
-          <SelectTrigger className="h-10 w-full"><SelectValue placeholder="Select your second choice" /></SelectTrigger>
-          <SelectContent>
-            {allowed.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>
+    <StepShell
+      onBack={onBack}
+      step={9}
+      title="2nd & 3rd faculty choices"
+      onSubmit={async () => {
+        setLoading(true);
+        await onSubmit(
+          { faculty_choice_2: choice2, faculty_choice_3: choice3 },
+          `2nd choice: ${choice2}, 3rd choice: ${choice3}`
+        );
+        setLoading(false);
+      }}
+      loading={loading}
+      valid={valid}
+    >
       {data.faculty_choice_1 && (
-        <p className="text-xs text-slate-500">1st choice: <strong>{data.faculty_choice_1}</strong></p>
-      )}
-    </StepShell>
-  );
-}
-
-function Step11({ data, onSubmit }: StepProps) {
-  const [choice, setChoice] = useState(data.faculty_choice_3 ?? "");
-  const [loading, setLoading] = useState(false);
-  const valid = !!choice;
-  const chosen = [data.faculty_choice_1, data.faculty_choice_2].filter(Boolean) as string[];
-  const allowed = allowedFaculties(chosen, chosen);
-
-  return (
-    <StepShell step={11} title="Third faculty choice" onSubmit={async () => {
-      setLoading(true);
-      await onSubmit({ faculty_choice_3: choice }, `Third choice faculty: ${choice}`);
-      setLoading(false);
-    }} loading={loading} valid={valid}>
-      <div className="grid gap-1.5">
-        <Label>Faculty (3rd choice)</Label>
-        <Select value={choice} onValueChange={v => setChoice(v ?? "")}>
-          <SelectTrigger className="h-10 w-full"><SelectValue placeholder="Select your third choice" /></SelectTrigger>
-          <SelectContent>
-            {allowed.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>
-      {chosen.length > 0 && (
         <p className="text-xs text-slate-500">
-          Chosen so far: {chosen.map((c, i) => <strong key={i}>{c}{i < chosen.length - 1 ? ", " : ""}</strong>)}
+          1st choice: <strong>{data.faculty_choice_1}</strong>
         </p>
       )}
+      <div className="grid gap-1.5">
+        <Label>Faculty (2nd choice)</Label>
+        <Select
+          value={choice2}
+          onValueChange={(v) => {
+            const next = v ?? "";
+            setChoice2(next);
+            if (choice3 === next) setChoice3("");
+          }}
+        >
+          <SelectTrigger className="h-10 w-full">
+            <SelectValue placeholder="Select your second choice" />
+          </SelectTrigger>
+          <SelectContent>
+            {allowed2.map((f) => (
+              <SelectItem key={f} value={f}>
+                {f}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="grid gap-1.5">
+        <Label>Faculty (3rd choice)</Label>
+        <Select value={choice3} onValueChange={(v) => setChoice3(v ?? "")}>
+          <SelectTrigger className="h-10 w-full">
+            <SelectValue placeholder="Select your third choice" />
+          </SelectTrigger>
+          <SelectContent>
+            {allowed3.map((f) => (
+              <SelectItem key={f} value={f}>
+                {f}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
     </StepShell>
   );
 }
 
-function Step12({ data, onSubmit }: StepProps) {
+function Step10({ data, onSubmit, onBack }: StepProps) {
   const [guardianName, setGuardianName] = useState(data.guardian_name ?? "");
   const [guardianMobile, setGuardianMobile] = useState(data.guardian_mobile ?? "");
   const [guardianRelation, setGuardianRelation] = useState(data.guardian_relation ?? "");
@@ -475,28 +522,28 @@ function Step12({ data, onSubmit }: StepProps) {
   const valid = guardianName.trim().length >= 2 && isValidPhone(guardianMobile) && guardianRelation.trim().length >= 2;
 
   return (
-    <StepShell step={12} title="Guardian / emergency contact" onSubmit={async () => {
+    <StepShell step={10} title="Guardian / emergency contact" onBack={onBack} onSubmit={async () => {
       setLoading(true);
       await onSubmit({ guardian_name: guardianName.trim(), guardian_mobile: guardianMobile.trim(), guardian_relation: guardianRelation.trim() },
         `Guardian: ${guardianName.trim()} (${guardianRelation.trim()}), Mobile: ${guardianMobile.trim()}`);
       setLoading(false);
     }} loading={loading} valid={valid}>
       <div className="grid gap-1.5">
-        <Label htmlFor="s12-gname">Guardian name</Label>
-        <Input id="s12-gname" placeholder="e.g. Osman Warsame" value={guardianName}
+        <Label htmlFor="s10-gname">Guardian name</Label>
+        <Input id="s10-gname" placeholder="e.g. Osman Warsame" value={guardianName}
           onChange={e => setGuardianName(e.target.value)} autoFocus />
       </div>
       <div className="grid gap-1.5">
-        <Label htmlFor="s12-gmob">Guardian mobile</Label>
+        <Label htmlFor="s10-gmob">Guardian mobile</Label>
         <PhoneInput
-          id="s12-gmob"
+          id="s10-gmob"
           value={guardianMobile}
           onChange={setGuardianMobile}
         />
       </div>
       <div className="grid gap-1.5">
-        <Label htmlFor="s12-grel">Relation</Label>
-        <Input id="s12-grel" placeholder="e.g. Father, Mother, Uncle" value={guardianRelation}
+        <Label htmlFor="s10-grel">Relation</Label>
+        <Input id="s10-grel" placeholder="e.g. Father, Mother, Uncle" value={guardianRelation}
           onChange={e => setGuardianRelation(e.target.value)} />
       </div>
     </StepShell>
@@ -511,93 +558,210 @@ const UPLOAD_SLOTS: { key: UploadSlot; label: string; accept: string }[] = [
   { key: "payment",     label: "Payment receipt",    accept: "image/*,.pdf" },
 ];
 
-function Step13({ data, onSubmit }: StepProps) {
+function Step11({ data, onSubmit, onBack }: StepProps) {
   const [files, setFiles] = useState<Partial<Record<UploadSlot, File>>>({});
+  const [previews, setPreviews] = useState<Partial<Record<UploadSlot, string>>>({});
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const fileInputRefs = useRef<Partial<Record<UploadSlot, HTMLInputElement>>>({});
-  const valid = UPLOAD_SLOTS.every(s => !!files[s.key]);
+  const valid = UPLOAD_SLOTS.every((s) => !!files[s.key]);
+
+  function clearSlot(key: UploadSlot) {
+    setPreviews((p) => {
+      const url = p[key];
+      if (url) URL.revokeObjectURL(url);
+      const next = { ...p };
+      delete next[key];
+      return next;
+    });
+    setFiles((p) => {
+      const next = { ...p };
+      delete next[key];
+      return next;
+    });
+    setError("");
+  }
 
   function handleFile(key: UploadSlot, f: File | null) {
     if (!f) return;
-    setFiles(prev => ({ ...prev, [key]: f }));
+    setError("");
+    setPreviews((p) => {
+      const prev = p[key];
+      if (prev) URL.revokeObjectURL(prev);
+      if (f.type.startsWith("image/")) {
+        return { ...p, [key]: URL.createObjectURL(f) };
+      }
+      const next = { ...p };
+      delete next[key];
+      return next;
+    });
+    setFiles((prev) => ({ ...prev, [key]: f }));
   }
+
+  useEffect(() => {
+    return () => {
+      Object.values(previews).forEach((url) => {
+        if (url) URL.revokeObjectURL(url);
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- revoke only on unmount
+  }, []);
 
   // Paste support
   useEffect(() => {
     function onPaste(e: ClipboardEvent) {
       const items = Array.from(e.clipboardData?.items ?? []);
-      const imageItem = items.find(i => i.type.startsWith("image/"));
+      const imageItem = items.find((i) => i.type.startsWith("image/"));
       if (!imageItem) return;
       const f = imageItem.getAsFile();
       if (!f) return;
-      // Paste goes into the first empty slot
-      const emptySlot = UPLOAD_SLOTS.find(s => !files[s.key]);
+      const emptySlot = UPLOAD_SLOTS.find((s) => !files[s.key]);
       if (emptySlot) handleFile(emptySlot.key, f);
     }
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
   }, [files]);
 
+  async function uploadSlot(slot: UploadSlot, file: File, conversationId: string) {
+    const form = new FormData();
+    form.set("file", file);
+    form.set("slot", slot);
+    form.set("conversation_id", conversationId);
+    const res = await fetch("/api/enrollment/upload", {
+      method: "POST",
+      body: form,
+    });
+    const json = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      url?: string;
+      error?: string;
+    } | null;
+    if (!res.ok || !json?.ok || !json.url) {
+      throw new Error(json?.error || `Failed to upload ${slot}`);
+    }
+    return json.url;
+  }
+
   async function handleSubmit() {
     setLoading(true);
-    // In production: upload files to Supabase Storage and get URLs.
-    // For now we use object URLs as placeholders (admin will verify uploads).
-    const urlMap: Partial<Record<UploadSlot, string>> = {};
-    for (const slot of UPLOAD_SLOTS) {
-      const f = files[slot.key];
-      if (f) urlMap[slot.key] = URL.createObjectURL(f);
+    setError("");
+    try {
+      const conversationId = data.conversation_id?.trim();
+      if (!conversationId) {
+        throw new Error("Missing conversation — close and reopen enrollment from chat.");
+      }
+
+      const urlMap: Partial<Record<UploadSlot, string>> = {};
+      for (const slot of UPLOAD_SLOTS) {
+        const f = files[slot.key];
+        if (!f) throw new Error(`Missing ${slot.label}`);
+        urlMap[slot.key] = await uploadSlot(slot.key, f, conversationId);
+      }
+
+      await onSubmit(
+        {
+          doc_photo_url: urlMap.photo,
+          doc_id_url: urlMap.id,
+          doc_certificate_url: urlMap.certificate,
+          doc_payment_url: urlMap.payment,
+          enrollment_step: 11,
+        },
+        "Documents uploaded — application submitted for review."
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setLoading(false);
     }
-    await onSubmit(
-      {
-        doc_photo_url:       urlMap.photo,
-        doc_id_url:          urlMap.id,
-        doc_certificate_url: urlMap.certificate,
-        doc_payment_url:     urlMap.payment,
-        enrollment_step:     13,
-      },
-      "Documents uploaded — application submitted for review."
-    );
-    setLoading(false);
   }
 
   return (
-    <StepShell step={13} title="Document uploads" onSubmit={handleSubmit} loading={loading} valid={valid}>
+    <StepShell step={11} title="Document uploads" onBack={onBack} onSubmit={handleSubmit} loading={loading} valid={valid}>
       <p className="text-xs text-slate-500">
-        Tap the <strong>+</strong> button for each document, or paste an image directly (Ctrl+V / ⌘+V).
+        Tap a card to upload, or paste an image (Ctrl+V / ⌘+V).
       </p>
-      <div className="flex flex-col gap-2">
-        {UPLOAD_SLOTS.map(slot => (
-          <div key={slot.key} className="flex items-center gap-3 rounded-lg border border-dashed border-slate-200 p-2">
-            <button
-              type="button"
-              className="flex items-center justify-center w-8 h-8 rounded-full bg-sky-50 hover:bg-sky-100 text-sky-600 shrink-0 transition-colors"
-              onClick={() => fileInputRefs.current[slot.key]?.click()}
-              title={`Upload ${slot.label}`}
+      {error ? (
+        <p className="rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-xs text-red-700">
+          {error}
+        </p>
+      ) : null}
+      <div className="flex flex-wrap gap-2">
+        {UPLOAD_SLOTS.map((slot) => {
+          const file = files[slot.key];
+          const preview = previews[slot.key];
+          const isImage = !!file && file.type.startsWith("image/");
+
+          return (
+            <div
+              key={slot.key}
+              className="relative flex aspect-video w-[calc(50%-0.25rem)] min-w-[7.5rem] flex-col overflow-hidden rounded-lg border border-dashed border-slate-200 bg-slate-50/60 sm:w-[calc(25%-0.375rem)]"
             >
-              <Paperclip className="w-4 h-4" />
-            </button>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium text-slate-700">{slot.label}</p>
-              {files[slot.key] ? (
-                <p className="text-xs text-sky-600 truncate">{files[slot.key]!.name}</p>
+              <button
+                type="button"
+                className="absolute inset-0 z-0"
+                onClick={() => fileInputRefs.current[slot.key]?.click()}
+                title={`Upload ${slot.label}`}
+                aria-label={`Upload ${slot.label}`}
+              />
+
+              {isImage && preview ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={preview}
+                  alt={slot.label}
+                  className="absolute inset-0 h-full w-full object-cover"
+                />
               ) : (
-                <p className="text-xs text-slate-400">Not uploaded</p>
+                <div className="relative z-10 flex h-full flex-col items-center justify-center gap-1 px-2 py-2 pointer-events-none">
+                  <Paperclip className="h-4 w-4 text-sky-600" />
+                  <p className="text-center text-[11px] font-medium leading-tight text-slate-700">
+                    {slot.label}
+                  </p>
+                  {file ? (
+                    <p className="w-full truncate text-center text-[10px] text-sky-600">
+                      {file.name}
+                    </p>
+                  ) : (
+                    <p className="text-[10px] text-slate-400">Tap to upload</p>
+                  )}
+                </div>
               )}
+
+              {isImage && preview && (
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/55 to-transparent px-1.5 pb-1 pt-4">
+                  <p className="truncate text-[10px] font-medium text-white">
+                    {slot.label}
+                  </p>
+                </div>
+              )}
+
+              {file && (
+                <button
+                  type="button"
+                  className="absolute right-1 top-1 z-20 rounded-full bg-white/90 p-0.5 shadow-sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    clearSlot(slot.key);
+                  }}
+                >
+                  <X className="h-3.5 w-3.5 text-slate-500 hover:text-red-500" />
+                </button>
+              )}
+
+              <input
+                type="file"
+                accept={slot.accept}
+                className="hidden"
+                ref={(el) => {
+                  if (el) fileInputRefs.current[slot.key] = el;
+                }}
+                onChange={(e) =>
+                  handleFile(slot.key, e.target.files?.[0] ?? null)
+                }
+              />
             </div>
-            {files[slot.key] && (
-              <button type="button" onClick={() => setFiles(p => { const n = {...p}; delete n[slot.key]; return n; })}>
-                <X className="w-4 h-4 text-slate-400 hover:text-red-400" />
-              </button>
-            )}
-            <input
-              type="file"
-              accept={slot.accept}
-              className="hidden"
-              ref={el => { if (el) fileInputRefs.current[slot.key] = el; }}
-              onChange={e => handleFile(slot.key, e.target.files?.[0] ?? null)}
-            />
-          </div>
-        ))}
+          );
+        })}
       </div>
     </StepShell>
   );
@@ -609,7 +773,7 @@ function Step13({ data, onSubmit }: StepProps) {
 
 const STEPS: React.ComponentType<StepProps>[] = [
   Step1, Step2, Step3, Step4, Step5, Step6, Step7,
-  Step8, Step9, Step10, Step11, Step12, Step13,
+  Step8, Step9, Step10, Step11,
 ];
 
 /* ------------------------------------------------------------------ */
@@ -620,39 +784,69 @@ export interface EnrollmentPanelProps {
   open: boolean;
   onClose: () => void;
   conversationId: string | null;
+  /** Fired when the student finishes the form (bot confirmation text). */
+  onComplete?: (payload: {
+    confirmation: string;
+    message?: {
+      id: string;
+      role: string;
+      content: string;
+      created_at: string;
+    } | null;
+  }) => void;
 }
 
 export function EnrollmentPanel({
   open,
   onClose,
   conversationId,
+  onComplete,
 }: EnrollmentPanelProps) {
   const [enrollData, setEnrollData] = useState<EnrollmentData>({});
   const [currentStep, setCurrentStep] = useState(0); // 0-indexed
   const [done, setDone] = useState(false);
 
-  // Resume: load existing partial data on open
+  // Resume: load existing partial data on open (always reset local "done" first)
   useEffect(() => {
     if (!open || !conversationId) return;
-    setEnrollData((prev) => ({ ...prev, conversation_id: conversationId }));
+
+    setDone(false);
+    setCurrentStep(0);
+    setEnrollData({ conversation_id: conversationId });
+
     fetch("/api/enrollment", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "load", conversation_id: conversationId }),
     })
-      .then(r => r.json())
+      .then((r) => r.json())
       .then(({ data: saved }) => {
-        if (saved) {
-          setEnrollData({
-            ...(saved as EnrollmentData),
-            conversation_id: conversationId,
-          });
-          // Resume from saved step
-          const savedStep = (saved.enrollment_step ?? 1) - 1;
-          setCurrentStep(Math.max(0, Math.min(savedStep, STEPS.length - 1)));
+        if (!saved) return;
+
+        const record = {
+          ...(saved as EnrollmentData),
+          conversation_id: conversationId,
+        };
+        setEnrollData(record);
+
+        const incomplete = isEnrollmentIncomplete(record);
+        const submitted = !incomplete && isEnrollmentSubmitted(record);
+
+        if (submitted) {
+          setDone(true);
+          setCurrentStep(TOTAL_STEPS - 1);
+          return;
         }
+
+        setDone(false);
+        const savedStep = Number(record.enrollment_step ?? 0);
+        setCurrentStep(
+          Math.max(0, Math.min(savedStep, TOTAL_STEPS - 1))
+        );
       })
-      .catch(() => {}); // silently ignore — start from scratch
+      .catch(() => {
+        // Start from scratch — local reset already applied
+      });
   }, [open, conversationId]);
 
   const handleStepSubmit: StepSubmitFn = useCallback(
@@ -668,23 +862,51 @@ export function EnrollmentPanel({
       setEnrollData(merged);
 
       // Persist to backend only — do not mirror answers into the chat transcript
+      let confirmation: string | null = null;
+      let confirmationRow: {
+        id: string;
+        role: string;
+        content: string;
+        created_at: string;
+      } | null = null;
       try {
-        await fetch("/api/enrollment", {
+        const res = await fetch("/api/enrollment", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(merged),
         });
+        const json = (await res.json().catch(() => null)) as {
+          confirmation_message?: string;
+          message?: {
+            id: string;
+            role: string;
+            content: string;
+            created_at: string;
+          } | null;
+        } | null;
+        confirmation = json?.confirmation_message?.trim() || null;
+        confirmationRow = json?.message ?? null;
       } catch {
         // Non-fatal — local state is still updated
       }
 
       if (nextStep >= STEPS.length) {
         setDone(true);
+        const text =
+          confirmation ||
+          enrollmentReceivedConfirmationMessage({
+            fullName: merged.full_name,
+            phone: merged.phone,
+          });
+        onComplete?.({
+          confirmation: text,
+          message: confirmationRow,
+        });
       } else {
         setCurrentStep(nextStep);
       }
     },
-    [currentStep, enrollData, conversationId]
+    [currentStep, enrollData, conversationId, onComplete]
   );
 
   if (!open) return null;
@@ -721,13 +943,12 @@ export function EnrollmentPanel({
         <div className="p-4 max-h-[60vh] overflow-y-auto">
           {done ? (
             <div className="text-center py-6">
-              <div className="text-3xl mb-3">🎉</div>
-              <p className="font-semibold text-slate-800">Application submitted!</p>
+              <p className="font-semibold text-slate-800">Application received</p>
               <p className="text-sm text-slate-500 mt-1">
-                Your application is now pending review. An admin will contact you to verify your documents.
+                Status: <strong>Under review</strong>. Check the chat for how to track your application.
               </p>
               <Button className="mt-4 bg-sky-600 hover:bg-sky-700 text-white" onClick={onClose}>
-                Close
+                Back to chat
               </Button>
             </div>
           ) : (
@@ -735,6 +956,9 @@ export function EnrollmentPanel({
               data={enrollData}
               onSubmit={handleStepSubmit}
               onCancel={onClose}
+              onBack={() =>
+                setCurrentStep((s) => Math.max(0, s - 1))
+              }
             />
           )}
         </div>

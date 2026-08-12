@@ -3,12 +3,17 @@ import "./globals.css";
 import { Geist } from "next/font/google";
 import { cn } from "@/lib/utils";
 import { ToastProvider } from "@/components/Toast";
+import { AdminSessionRedirect } from "@/components/AdminSessionRedirect";
 
-const geist = Geist({subsets:['latin'],variable:'--font-sans'});
+const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
   title: "SNUBot",
   description: "Somali National University admissions assistant",
+  icons: {
+    icon: "/snu-emblem.png",
+    apple: "/snu-emblem.png",
+  },
 };
 
 export default function RootLayout({
@@ -19,7 +24,10 @@ export default function RootLayout({
   return (
     <html lang="en" className={cn("h-full font-roboto", geist.variable)}>
       <body className="h-full m-0 font-roboto">
-        <ToastProvider>{children}</ToastProvider>
+        <ToastProvider>
+          <AdminSessionRedirect />
+          {children}
+        </ToastProvider>
       </body>
     </html>
   );
