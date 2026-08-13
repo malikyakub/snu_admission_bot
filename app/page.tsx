@@ -27,6 +27,7 @@ import {
 } from "@/lib/enrollment-intent";
 import {
   decodeSourcesHeader,
+  normalizeChatSources,
   type ChatSource,
 } from "@/lib/sources";
 import {
@@ -181,6 +182,23 @@ function remoteToChatMessages(rows: RemoteChatMessage[]): ChatMessage[] {
   return out;
 }
 
+function normalizeMessageContent(content: string): string {
+  return content.replace(/\s+/g, " ").trim();
+}
+
+/** True when streamed/local text and DB text are the same turn (allowing CTA/whitespace drift). */
+function sameChatMessage(a: ChatMessage, b: ChatMessage): boolean {
+  if (a.role !== b.role) return false;
+  if (a.id && b.id && a.id === b.id) return true;
+  const ca = normalizeMessageContent(a.content);
+  const cb = normalizeMessageContent(b.content);
+  if (ca === cb) return true;
+  if (!ca || !cb) return false;
+  // Local may append an enrollment CTA; DB/stream may differ by whitespace/stripping
+  if (ca.includes(cb) || cb.includes(ca)) return true;
+  return false;
+}
+
 /** Merge remote DB messages into local UI state without clobbering an in-flight stream. */
 function mergeRemoteIntoLocal(
   local: ChatMessage[],
@@ -190,47 +208,58 @@ function mergeRemoteIntoLocal(
   if (remote.length === 0) return local;
 
   if (isPending) {
-    const ids = new Set(local.map((m) => m.id).filter(Boolean) as string[]);
-    const fingerprints = new Set(local.map((m) => `${m.role}\0${m.content}`));
     const next = [...local];
     for (const m of remote) {
-      if (m.id && ids.has(m.id)) continue;
-      if (fingerprints.has(`${m.role}\0${m.content}`)) continue;
-      // During a stream, only pull in admin replies
-      if (m.role === "admin") {
-        next.push(m);
-        if (m.id) ids.add(m.id);
-        fingerprints.add(`${m.role}\0${m.content}`);
-      }
+      if (m.role !== "admin") continue;
+      if (next.some((l) => sameChatMessage(l, m))) continue;
+      next.push(m);
     }
     return next;
   }
 
-  // Prefer remote order; keep local sources on matching assistant messages
-  const sourceByContent = new Map<string, ChatSource[]>();
-  for (const m of local) {
-    if (m.role === "assistant" && m.sources?.length) {
-      sourceByContent.set(m.content, m.sources);
-    }
-  }
-
+  // Prefer remote order; keep local sources / client-only suffixes (e.g. enrollment CTA)
   const merged = remote.map((m) => {
-    if (m.role === "assistant") {
-      const sources = sourceByContent.get(m.content);
-      return sources ? { ...m, sources } : m;
-    }
-    return m;
+    const match = local.find((l) => sameChatMessage(l, m));
+    if (!match) return m;
+    const localNorm = normalizeMessageContent(match.content);
+    const remoteNorm = normalizeMessageContent(m.content);
+    const preferLocalContent =
+      m.role === "assistant" &&
+      localNorm.length > remoteNorm.length &&
+      localNorm.includes(remoteNorm);
+    return {
+      ...m,
+      content: preferLocalContent ? match.content : m.content,
+      sources:
+        match.sources?.length && m.role === "assistant"
+          ? match.sources
+          : m.sources,
+    };
   });
 
-  // Keep local-only turns not yet persisted (enrollment welcome, race before insert)
-  const remoteIds = new Set(merged.map((m) => m.id).filter(Boolean) as string[]);
-  const remoteFingerprints = new Set(
-    merged.map((m) => `${m.role}\0${m.content}`)
-  );
-  for (const m of local) {
-    if (m.id && remoteIds.has(m.id)) continue;
-    if (remoteFingerprints.has(`${m.role}\0${m.content}`)) continue;
-    merged.push(m);
+  // Walk local in order, consuming messages that correspond to remote.
+  // Exact content often drifts (CTA appended client-side, whitespace), so also
+  // accept same-role positional matches — that prevents duplicate bubbles.
+  let li = 0;
+  for (const rm of remote) {
+    let found = -1;
+    for (let j = li; j < local.length; j++) {
+      if (sameChatMessage(local[j], rm)) {
+        found = j;
+        break;
+      }
+    }
+    if (found < 0 && li < local.length && local[li].role === rm.role) {
+      found = li;
+    }
+    if (found >= 0) li = found + 1;
+  }
+
+  // Only keep a true optimistic tail (not yet in DB), never re-append older turns
+  for (let j = li; j < local.length; j++) {
+    const msg = local[j];
+    if (merged.some((rm) => sameChatMessage(rm, msg))) continue;
+    merged.push(msg);
   }
 
   return merged;
@@ -264,7 +293,7 @@ function AssistantBody({
     .trim();
 
   const parts = parseCtaContent(cleaned);
-  const uniqueSources = sources ?? [];
+  const uniqueSources = normalizeChatSources(sources);
 
   return (
     <div className="font-roboto text-sm text-slate-800 space-y-3">
@@ -319,36 +348,24 @@ function AssistantBody({
         );
       })}
 
-      {uniqueSources.length > 0 && (
-        <div className="pt-1">
-          <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-            Sources
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {uniqueSources.map((s) => (
+      {uniqueSources.length > 0 ? (
+        <div className="pt-1 space-y-0.5 border-t border-slate-100/80">
+          {uniqueSources.map((s) => (
+            <p key={s.url} className="text-[11px] leading-snug text-slate-400">
+              Source:{" "}
               <a
-                key={s.url}
                 href={s.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white pl-1 pr-2.5 py-1 text-xs font-medium text-slate-700 shadow-sm hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 transition-colors"
+                className="text-slate-500 underline underline-offset-2 decoration-slate-300 hover:text-sky-700 hover:decoration-sky-400 break-all"
                 title={s.url}
               >
-                <span className="flex h-5 w-5 items-center justify-center overflow-hidden rounded-full border border-sky-100 bg-white">
-                  <Image
-                    src="/snu-logo.png"
-                    alt=""
-                    width={14}
-                    height={14}
-                    className="object-contain"
-                  />
-                </span>
-                <span className="max-w-[10rem] truncate">{s.label}</span>
+                {s.label}
               </a>
-            ))}
-          </div>
+            </p>
+          ))}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -679,21 +696,10 @@ export default function HomePage() {
 
     if (!ct.includes("text/event-stream")) {
       const json = await res.json();
-      const jsonSources: ChatSource[] = Array.isArray(json?.sources)
-        ? json.sources
-            .map((s: { url?: string; label?: string; source_url?: string }) => {
-              const url = s.url || s.source_url;
-              if (!url || typeof url !== "string") return null;
-              return {
-                url,
-                label:
-                  typeof s.label === "string" && s.label
-                    ? s.label
-                    : url.replace(/^https?:\/\/(www\.)?/, "").split("/")[0],
-              };
-            })
-            .filter(Boolean)
-        : headerSources;
+      // Prefer server-grounded sources; never fall back to raw chunks (those include unused URLs)
+      const jsonSources = normalizeChatSources(
+        Array.isArray(json?.sources) ? json.sources : headerSources
+      );
       let answer = (json?.answer as string | undefined) ?? "";
       // Belts-and-braces: never keep a handoff CTA on a high-confidence turn
       if (json?.low_confidence !== true) {
@@ -716,6 +722,7 @@ export default function HomePage() {
     const reader  = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "", assistantText = "";
+    let streamSources: ChatSource[] = headerSources;
 
     setMessages((prev) =>
       prev[prev.length - 1]?.role === "assistant" ? prev : [...prev, { role: "assistant", content: "" }]
@@ -726,7 +733,9 @@ export default function HomePage() {
       setMessages((prev) => {
         const next = [...prev];
         const last = next.length - 1;
-        if (next[last]?.role === "assistant") next[last] = { role: "assistant", content: assistantText };
+        if (next[last]?.role === "assistant") {
+          next[last] = { ...next[last], content: assistantText };
+        }
         return next;
       });
     };
@@ -744,8 +753,16 @@ export default function HomePage() {
           const payload = t.slice(5).trim();
           if (!payload || payload === "[DONE]") continue;
           try {
-            const d = JSON.parse(payload)?.choices?.[0]?.delta?.content;
-            if (typeof d === "string" && d) push(d);
+            const d = JSON.parse(payload) as {
+              snubot_sources?: unknown;
+              choices?: { delta?: { content?: string } }[];
+            };
+            if (d?.snubot_sources) {
+              streamSources = normalizeChatSources(d.snubot_sources);
+              continue;
+            }
+            const delta = d?.choices?.[0]?.delta?.content;
+            if (typeof delta === "string" && delta) push(delta);
           } catch { /* malformed SSE chunk — skip */ }
         }
       }
@@ -764,14 +781,17 @@ export default function HomePage() {
           const next = [...prev];
           const last = next.length - 1;
           if (next[last]?.role === "assistant") {
-            next[last] = { role: "assistant", content: assistantText };
+            next[last] = { ...next[last], content: assistantText };
           }
           return next;
         });
       }
     }
 
-    return { answer: assistantText, sources: headerSources };
+    return {
+      answer: assistantText,
+      sources: normalizeChatSources(streamSources),
+    };
   }
 
   /* ---------------------------------------------------------------- */

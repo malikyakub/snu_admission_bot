@@ -65,6 +65,16 @@ const TOPICS: TopicEntry[] = [
     ],
   },
   {
+    topic: "foundation_year",
+    weight: 4,
+    patterns: [
+      /\bfoundation\s+years?\b/i,
+      /\bfoundation\s+program(?:me)?\b/i,
+      /\bEAP\b/,
+      /\benglish for academic\b/i,
+    ],
+  },
+  {
     topic: "fees",
     weight: 4,
     patterns: [

@@ -9,25 +9,193 @@ import {
 import { isEnrollInterest } from "./enrollment-intent";
 import { normalizePhoneDigits } from "./students";
 
-const GREETING_PATTERNS: RegExp[] = [
+export type SmallTalkKind = "greeting" | "thanks" | "ack" | "bye" | "filler";
+
+const GREETING_ONLY: RegExp[] = [
   /^(hey|hi|hello|hiya|howdy|hola|salaam|salam|yo|sup|what'?s up|wassup)[!.,?]*$/i,
   /^(good\s?(morning|afternoon|evening|night|day))[!.,?]*$/i,
+];
+
+const THANKS_PATTERNS: RegExp[] = [
   /^(thanks?|thank\s?you|thx|ty|cheers|appreciated?)[!.,?]*$/i,
-  /^(ok|okay|k|cool|got\s?it|noted|sure|alright|sounds good|great|nice|perfect|wonderful|awesome)[!.,?]*$/i,
-  /^(bye|goodbye|see\s?ya|later|take\s?care|cya)[!.,?]*$/i,
+  /^(thanks?|thank\s?you)[,!]?\s+(a\s+lot|so\s+much|very\s+much)[!.,?]*$/i,
+];
+
+const ACK_PATTERNS: RegExp[] = [
+  /^(ok|okay|k|cool|got\s?it|noted|sure|alright|all\s+right|sounds\s+good|great|nice|perfect|wonderful|awesome|fine|understood|makes\s+sense)[!.,?]*$/i,
+  /^(no\s+need|no\s+thanks|no\s+thank\s+you|not\s+now|never\s*mind|nevermind|all\s+good|all\s+set|that'?s\s+(all|it|fine|ok|okay))[!.,?]*$/i,
+  /^(will\s+do|roger|copy\s+that)[!.,?]*$/i,
+];
+
+const BYE_PATTERNS: RegExp[] = [
+  /^(bye|goodbye|see\s?ya|later|take\s?care|cya|good\s+night)[!.,?]*$/i,
+];
+
+const FILLER_PATTERNS: RegExp[] = [
   /^(yes|no|yep|nope|yup|nah)[!.,?]*$/i,
   /^(lol|haha|hehe|😊|👍|🙏)[!.,?]*$/i,
 ];
 
-export function isGreeting(message: string): boolean {
-  const t = message.normalize("NFKC").trim();
-  if (t.length > 40) return false;
-  // Don't treat phone replies as greetings
-  if (extractPhoneNumber(t)) return false;
-  return GREETING_PATTERNS.some((p) => {
+/** Tokens allowed in compound acks like "great, thanks" / "ok thanks". */
+const SMALLTALK_TOKENS = new Set([
+  "hey",
+  "hi",
+  "hello",
+  "hiya",
+  "howdy",
+  "hola",
+  "salaam",
+  "salam",
+  "yo",
+  "sup",
+  "thanks",
+  "thank",
+  "you",
+  "thx",
+  "ty",
+  "cheers",
+  "appreciated",
+  "ok",
+  "okay",
+  "k",
+  "cool",
+  "got",
+  "it",
+  "noted",
+  "sure",
+  "alright",
+  "all",
+  "right",
+  "sounds",
+  "good",
+  "great",
+  "nice",
+  "perfect",
+  "wonderful",
+  "awesome",
+  "fine",
+  "understood",
+  "makes",
+  "sense",
+  "no",
+  "need",
+  "not",
+  "now",
+  "never",
+  "mind",
+  "nevermind",
+  "set",
+  "thats",
+  "that's",
+  "will",
+  "do",
+  "roger",
+  "copy",
+  "that",
+  "bye",
+  "goodbye",
+  "seeya",
+  "later",
+  "take",
+  "care",
+  "cya",
+  "yes",
+  "yep",
+  "nope",
+  "yup",
+  "nah",
+  "lol",
+  "haha",
+  "hehe",
+  "a",
+  "lot",
+  "so",
+  "much",
+  "very",
+  "morning",
+  "afternoon",
+  "evening",
+  "night",
+  "day",
+  "whats",
+  "what's",
+  "up",
+  "wassup",
+]);
+
+const THANKS_TOKENS = new Set([
+  "thanks",
+  "thank",
+  "thx",
+  "ty",
+  "cheers",
+  "appreciated",
+]);
+
+function matchesAny(text: string, patterns: RegExp[]): boolean {
+  return patterns.some((p) => {
     p.lastIndex = 0;
-    return p.test(t);
+    return p.test(text);
   });
+}
+
+/** "great, thanks" / "ok thanks!" — every token is small-talk vocabulary. */
+function detectCompoundSmallTalk(text: string): SmallTalkKind | null {
+  const tokens = text
+    .toLowerCase()
+    .replace(/[^a-z0-9'\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+  if (tokens.length < 2 || tokens.length > 6) return null;
+  if (!tokens.every((tok) => SMALLTALK_TOKENS.has(tok))) return null;
+  if (tokens.some((tok) => THANKS_TOKENS.has(tok))) return "thanks";
+  if (tokens.some((tok) => tok === "bye" || tok === "goodbye" || tok === "cya")) {
+    return "bye";
+  }
+  return "ack";
+}
+
+/** Classify short acknowledgment / greeting / closing messages (or null). */
+export function detectSmallTalk(message: string): SmallTalkKind | null {
+  const t = message.normalize("NFKC").replace(/\s+/g, " ").trim();
+  if (!t || t.length > 48) return null;
+  // Don't treat phone replies as small-talk
+  if (extractPhoneNumber(t)) return null;
+
+  if (matchesAny(t, THANKS_PATTERNS)) return "thanks";
+  if (matchesAny(t, ACK_PATTERNS)) return "ack";
+  if (matchesAny(t, BYE_PATTERNS)) return "bye";
+  if (matchesAny(t, GREETING_ONLY)) return "greeting";
+  if (matchesAny(t, FILLER_PATTERNS)) return "filler";
+
+  const compound = detectCompoundSmallTalk(t);
+  if (compound) return compound;
+
+  return null;
+}
+
+/** True for short greetings, thanks, acks, closings — skip RAG / handoff. */
+export function isGreeting(message: string): boolean {
+  return detectSmallTalk(message) !== null;
+}
+
+/** Brief friendly reply — never includes admin handoff CTA. */
+export function smallTalkReply(message: string): string {
+  switch (detectSmallTalk(message)) {
+    case "thanks":
+      return "You're welcome! Let me know if you need anything else.";
+    case "ack":
+      return "Sounds good — ask anytime if you have another question.";
+    case "bye":
+      return "Take care! Come back anytime you have admissions questions.";
+    case "filler":
+      return "Happy to help — ask me anything about SNU admissions.";
+    case "greeting":
+    default:
+      return "Hey! I'm here to help with SNU admissions — ask me about faculties, requirements, fees, the entrance exam, or check your enrollment status.";
+  }
 }
 
 /** Enrollment / application status check via phone number (not RAG). */

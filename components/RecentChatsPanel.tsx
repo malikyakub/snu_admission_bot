@@ -122,7 +122,13 @@ export function RecentChatsPanel({ className }: { className?: string }) {
             No chats yet.
           </p>
         ) : (
-          <ul className="flex flex-col gap-0.5 overflow-hidden">
+          <ul
+            className={cn(
+              "min-h-0 flex-1 overflow-y-auto",
+              "flex flex-col gap-0.5",
+              "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            )}
+          >
             {chats.map((chat) => (
               <li
                 key={chat.conversation_id}

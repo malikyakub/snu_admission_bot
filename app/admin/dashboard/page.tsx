@@ -177,7 +177,7 @@ export default function AdminDashboardPage() {
   const granularity = stats?.trafficGranularity ?? "day";
 
   return (
-      <div className="flex min-h-0 flex-1 flex-col gap-6">
+      <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto md:overflow-hidden">
         <div className="shrink-0">
           <h1 className="font-roboto text-2xl font-semibold tracking-tight text-slate-900">
             Dashboard
@@ -229,8 +229,8 @@ export default function AdminDashboardPage() {
               />
             </div>
 
-            <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 md:grid-cols-3">
-              <Card className="flex min-h-0 flex-col bg-white shadow-sm ring-slate-200/80 md:col-span-2">
+            <div className="grid grid-cols-1 gap-4 md:min-h-0 md:flex-1 md:grid-cols-3">
+              <Card className="flex shrink-0 flex-col bg-white shadow-sm ring-slate-200/80 md:col-span-2 md:min-h-0">
                 <CardHeader className="shrink-0">
                   <CardTitle className="text-base text-slate-900">
                     Chat traffic
@@ -239,7 +239,7 @@ export default function AdminDashboardPage() {
                     Conversations opened in the last 24 hours (by hour)
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="flex min-h-0 flex-1 flex-col pb-4">
+                <CardContent className="flex flex-col pb-4 md:min-h-0 md:flex-1">
                   {chartData.length === 0 ? (
                     <p className="py-12 text-center text-sm text-slate-500 font-roboto">
                       No conversations yet — traffic will appear here.
@@ -247,7 +247,7 @@ export default function AdminDashboardPage() {
                   ) : (
                     <ChartContainer
                       config={trafficChartConfig}
-                      className="aspect-auto h-full min-h-[280px] w-full flex-1"
+                      className="aspect-auto h-[260px] w-full sm:h-[280px] md:h-full md:min-h-[280px] md:flex-1"
                     >
                       <BarChart
                         accessibilityLayer
@@ -293,7 +293,7 @@ export default function AdminDashboardPage() {
                 </CardContent>
               </Card>
 
-              <RecentChatsPanel className="min-h-[320px] md:col-span-1 md:min-h-0" />
+              <RecentChatsPanel className="h-[300px] shrink-0 md:col-span-1 md:h-auto md:min-h-0" />
             </div>
           </>
         ) : null}

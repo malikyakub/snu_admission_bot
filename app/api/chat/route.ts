@@ -34,6 +34,7 @@ import {
   lastAssistantOfferedStartEnrollment,
   lastAssistantStatusNotFound,
   shouldExitPhoneWait,
+  smallTalkReply,
   startEnrollmentStubMessage,
   statusAskForPhoneMessage,
   statusNotFoundMessage,
@@ -58,7 +59,9 @@ import {
 import { searchKbChunks, getSupabase, type KbChunkMatch } from "@/lib/supabase";
 import {
   encodeSourcesHeader,
-  sourcesFromChunks,
+  pruneWeakChunks,
+  sourcesUsedInAnswer,
+  type ChatSource,
 } from "@/lib/sources";
 import {
   saveMessageAsync,
@@ -159,6 +162,39 @@ function appendTextToSseStream(
             encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
           );
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        }
+      } catch (err) {
+        controller.error(err);
+        return;
+      }
+      controller.close();
+    },
+  });
+}
+
+function appendSourcesEventAfterStream(
+  upstream: ReadableStream<Uint8Array>,
+  sourcesPromise: Promise<ChatSource[]>
+): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    async start(controller) {
+      const reader = upstream.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) controller.enqueue(value);
+        }
+        try {
+          const sources = await sourcesPromise;
+          const payload = JSON.stringify({ snubot_sources: sources });
+          controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
+        } catch (err) {
+          console.warn(
+            "[/api/chat] sources event:",
+            err instanceof Error ? err.message : err
+          );
         }
       } catch (err) {
         controller.error(err);
@@ -372,19 +408,39 @@ export async function POST(req: Request) {
     }
 
     // --- Greeting / small-talk shortcut (before RAG) ---
-    if (isGreeting(message)) {
-      return jsonReply(conversation?.id ?? null, message, {
-        answer:
-          "Hey! I'm here to help with SNU admissions — ask me about faculties, requirements, fees, the entrance exam, or check your enrollment status.",
-        conversation_id: conversation?.id ?? null,
-        needs_human: false,
-        handoff_offered: false,
-        low_confidence: false,
-        top_similarity: null,
-        intent: { ...EMPTY_INTENT, topic: "greeting" },
-        sources: [],
-        flow: "greeting",
-      });
+    // Skip when this turn is accepting a pending admin-handoff offer ("yes"/"sure").
+    {
+      const awaitingHandoffConfirm =
+        (conversation?.handoff_offered ?? false) ||
+        lastAssistantOfferedHandoff(history);
+      const handoffYes =
+        awaitingHandoffConfirm && isAffirmativeHandoff(message);
+      if (isGreeting(message) && !handoffYes) {
+        if (awaitingHandoffConfirm && isHandoffDecline(message)) {
+          try {
+            if (conversation?.id) {
+              await clearHandoffOffered(conversation.id);
+              conversation = { ...conversation, handoff_offered: false };
+            }
+          } catch (err) {
+            console.warn(
+              "[/api/chat] clear handoff_offered (small-talk):",
+              err instanceof Error ? err.message : err
+            );
+          }
+        }
+        return jsonReply(conversation?.id ?? null, message, {
+          answer: smallTalkReply(message),
+          conversation_id: conversation?.id ?? null,
+          needs_human: false,
+          handoff_offered: false,
+          low_confidence: false,
+          top_similarity: null,
+          intent: { ...EMPTY_INTENT, topic: "greeting" },
+          sources: [],
+          flow: "greeting",
+        });
+      }
     }
 
     // Enrollment is offered via CTA after a normal answer — never auto-open here.
@@ -629,7 +685,21 @@ export async function POST(req: Request) {
           err instanceof Error ? err.message : err
         );
       }
-      // Fall through — student moved on; answer this message normally.
+      // Pure ack/decline ("no need", "nevermind") — don't fall into RAG handoff loop
+      if (isGreeting(message)) {
+        return jsonReply(conversation?.id ?? null, message, {
+          answer: smallTalkReply(message),
+          conversation_id: conversation?.id ?? null,
+          needs_human: false,
+          handoff_offered: false,
+          low_confidence: false,
+          top_similarity: null,
+          intent: { ...EMPTY_INTENT, topic: "greeting" },
+          sources: [],
+          flow: "greeting",
+        });
+      }
+      // Fall through — student moved on with a real follow-up question.
     } else if (enrollInterest) {
       // Prefer enrollment CTA over handoff / low-confidence RAG for "I want in"
       const earlyIntent = detectIntentWithHistory(message, history);
@@ -712,9 +782,11 @@ export async function POST(req: Request) {
     // --- RAG path ---
     const intent = detectIntentWithHistory(message, history);
     const embedMessage =
-      intent.faculty && !detectIntent(message).faculty
-        ? `${message} ${intent.faculty} fees tuition`
-        : message;
+      intent.topic === "foundation_year"
+        ? `${message} Foundation Programme EAP mandatory foundation year`
+        : intent.faculty && !detectIntent(message).faculty
+          ? `${message} ${intent.faculty} fees tuition`
+          : message;
     const embedding = await embedQuery(embedMessage);
 
     let chunks: KbChunkMatch[] = [];
@@ -749,6 +821,20 @@ export async function POST(req: Request) {
       if (chunks.length === 0) {
         chunks = await searchKbChunks(embedding, { matchCount: TOP_K });
       }
+    } else if (intent.topic === "foundation_year") {
+      // Foundation/EAP facts live in fees + tiers chunks — don't fall through to
+      // unrelated faculty program pages via broad semantic search.
+      const [feeChunks, tierChunks] = await Promise.all([
+        searchKbChunks(embedding, { matchCount: TOP_K, topic: "fees" }),
+        searchKbChunks(embedding, {
+          matchCount: 3,
+          topic: "faculty_tiers",
+        }),
+      ]);
+      chunks = mergeChunksBySimilarity([feeChunks, tierChunks], TOP_K);
+      if (chunks.length === 0) {
+        chunks = await searchKbChunks(embedding, { matchCount: TOP_K });
+      }
     } else {
       const attempts: { topic?: string | null; faculty?: string | null }[] = [];
       if (intent.topic && intent.faculty) {
@@ -758,15 +844,34 @@ export async function POST(req: Request) {
       if (intent.topic) attempts.push({ topic: intent.topic });
       attempts.push({});
 
+      let best: KbChunkMatch[] = [];
+      let bestSim = -1;
       for (const filters of attempts) {
-        chunks = await searchKbChunks(embedding, {
+        const found = await searchKbChunks(embedding, {
           matchCount: TOP_K,
           topic: filters.topic ?? null,
           faculty: filters.faculty ?? null,
         });
-        if (chunks.length > 0) break;
+        if (found.length === 0) continue;
+        const top = found[0]?.similarity ?? 0;
+        if (top > bestSim) {
+          best = found;
+          bestSim = top;
+        }
+        // Strong filtered hit — no need to keep searching looser filters
+        if (
+          top >= 0.55 &&
+          (filters.topic != null || filters.faculty != null)
+        ) {
+          break;
+        }
       }
+      chunks = best;
     }
+
+    // Drop weak hitchhikers from broad search. Citations stay stricter
+    // (confidence + answer reflection) so low-sim context won't be cited.
+    chunks = pruneWeakChunks(chunks, { maxGap: 0.1, minSimilarity: 0.38 });
 
     const topSimilarity =
       chunks.length > 0 && typeof chunks[0].similarity === "number"
@@ -881,7 +986,6 @@ export async function POST(req: Request) {
         suffix = `\n\n${ctaMarker("handoff", "Connect with an admin")}`;
       }
 
-      const sourceList = sourcesFromChunks(chunks);
       const withSuffix = suffix
         ? appendTextToSseStream(groqRes.body, suffix)
         : groqRes.body;
@@ -892,10 +996,18 @@ export async function POST(req: Request) {
         if (lowConfidence) return text;
         return stripHandoffCta(text);
       });
+      const sourcesPromise = cleanedPromise.then((text) =>
+        sourcesUsedInAnswer(chunks, text)
+      );
       // User then assistant, sequentially after the response (avoids ordering races)
       saveUserAndAssistantWhenReady(conversationId, message, cleanedPromise);
 
-      return new Response(streamOut, {
+      const streamWithSources = appendSourcesEventAfterStream(
+        streamOut,
+        sourcesPromise
+      );
+
+      return new Response(streamWithSources, {
         headers: {
           "Content-Type": "text/event-stream; charset=utf-8",
           "Cache-Control": "no-cache, no-transform",
@@ -905,7 +1017,8 @@ export async function POST(req: Request) {
           "X-SNUBot-Chunks": String(chunks.length),
           "X-SNUBot-Low-Confidence": lowConfidence ? "1" : "0",
           "X-SNUBot-Handoff-Offered": handoffOfferedThisTurn ? "1" : "0",
-          "X-SNUBot-Sources": encodeSourcesHeader(sourceList),
+          // Prefer trailing snubot_sources SSE event (answer-grounded). Header may be empty.
+          "X-SNUBot-Sources": encodeSourcesHeader([]),
           ...(conversationId
             ? { "X-SNUBot-Conversation-Id": conversationId }
             : {}),
@@ -924,7 +1037,7 @@ export async function POST(req: Request) {
       answer = finalizeAnswer(answer);
     }
 
-    const sourceList = sourcesFromChunks(chunks);
+    const sourceList = sourcesUsedInAnswer(chunks, answer);
 
     if (skipUserSave) {
       const saved = await saveTurnNow(conversationId, message, answer, {
