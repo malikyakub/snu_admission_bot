@@ -27,3 +27,15 @@ yarn-debug.log*
 yarn-error.log*
 
 .vercel
+
+# Unnecessary dev/data files
+_handoff_test.json
+design/
+image.png
+ingest.js
+ingest_addendum.js
+kb_chunks.json
+kb_chunks_fees_addendum.json
+outputs/
+snu_logo.png
+questions.json

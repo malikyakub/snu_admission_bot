@@ -4,12 +4,20 @@ import { Geist } from "next/font/google";
 import { cn } from "@/lib/utils";
 import { ToastProvider } from "@/components/Toast";
 import { AdminSessionRedirect } from "@/components/AdminSessionRedirect";
+import { Analytics } from "@vercel/analytics/react";
 
 const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
-  title: "SNUBot",
-  description: "Somali National University admissions assistant",
+  metadataBase: new URL('https://snubot.vercel.app'),
+  title: "SNUBot — Somali National University Admissions Assistant",
+  description: "Get instant answers about SNU faculties, admission requirements, fees, the entrance exam, and enrollment — no waiting for office hours.",
+  openGraph: {
+    title: "SNUBot — Somali National University Admissions Assistant",
+    description: "Get instant answers about SNU faculties, admission requirements, fees, the entrance exam, and enrollment — no waiting for office hours.",
+    images: ["/snu-logo.png"],
+    type: "website",
+  },
   icons: {
     icon: "/snu-emblem.png",
     apple: "/snu-emblem.png",
@@ -27,6 +35,7 @@ export default function RootLayout({
         <ToastProvider>
           <AdminSessionRedirect />
           {children}
+          <Analytics />
         </ToastProvider>
       </body>
     </html>
