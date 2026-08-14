@@ -5,6 +5,12 @@ import Image from "next/image";
 import { useParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import {
+  differenceInMinutes,
+  format,
+  isToday,
+  isYesterday,
+} from "date-fns";
 import { Loader2, Send, User, UserStar, Bot, ClipboardList } from "lucide-react";
 import { supabase, supabaseReady } from "@/app/_lib/supabaseClient";
 import { useToast } from "@/components/Toast";
@@ -18,6 +24,21 @@ type ChatMessage = {
   content: string;
   created_at: string;
 };
+
+/**
+ * just now → N min ago → HH:mm (today) → yesterday HH:mm → Aug d HH:mm
+ */
+function formatMessageTime(iso: string, now = new Date()): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+
+  const mins = differenceInMinutes(now, d);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  if (isToday(d)) return format(d, "HH:mm");
+  if (isYesterday(d)) return `yesterday ${format(d, "HH:mm")}`;
+  return format(d, "MMM d HH:mm");
+}
 
 function stripCtas(text: string): string {
   return text.replace(/\[\[cta:[^\]]+\]\]/gi, "").trim();
@@ -205,6 +226,12 @@ export default function AdminChatPage() {
   );
   const [inputValue, setInputValue] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const reload = useCallback(async () => {
     if (!id) return;
@@ -500,6 +527,16 @@ export default function AdminChatPage() {
                         />
                       </div>
                     )}
+
+                    {m.created_at ? (
+                      <time
+                        className="px-0.5 text-[10px] tabular-nums text-slate-400/90 font-roboto"
+                        dateTime={m.created_at}
+                        title={new Date(m.created_at).toLocaleString()}
+                      >
+                        {formatMessageTime(m.created_at, new Date(nowTick))}
+                      </time>
+                    ) : null}
                   </div>
                 </div>
               );

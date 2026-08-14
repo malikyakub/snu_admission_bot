@@ -119,6 +119,17 @@ export default function LoginPage() {
                 Admissions administration — review applications, manage
                 conversations, and support students.
               </p>
+              <p className="mt-5 text-[11px] xl:text-xs tracking-wide text-sky-100/55">
+                This was made for SNU by{" "}
+                <a
+                  href="https://www.malikyakub.dev/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-semibold text-sky-100/80 underline-offset-2 hover:text-white hover:underline"
+                >
+                  Malik Yakub
+                </a>
+              </p>
             </div>
           </div>
         </div>

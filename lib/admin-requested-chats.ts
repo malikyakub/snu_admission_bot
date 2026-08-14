@@ -4,6 +4,8 @@ export type RequestedChat = {
   conversation_id: string;
   title: string;
   updated_at: string;
+  /** True when the latest message is from the student (admin has not replied yet). */
+  awaiting_reply: boolean;
 };
 
 function stripCtas(text: string): string {
@@ -80,21 +82,46 @@ export async function getRequestedChats(limit = 30): Promise<RequestedChat[]> {
     }
   }
 
+  // Latest message role per conversation — student last => awaiting admin reply
+  const lastRoleById = new Map<string, string>();
+  const { data: recentMsgs } = await supabase
+    .from("messages")
+    .select("conversation_id, role, created_at")
+    .in("conversation_id", ids)
+    .order("created_at", { ascending: false });
+
+  for (const row of recentMsgs ?? []) {
+    const id = String(row.conversation_id);
+    if (lastRoleById.has(id)) continue;
+    lastRoleById.set(id, String(row.role ?? ""));
+  }
+
   const updatedById = new Map(
     (rows ?? []).map((r) => [String(r.id), String(r.updated_at)])
   );
 
-  return ids.map((id) => {
+  const chats = ids.map((id) => {
     const stored = titleById.get(id)?.trim();
     const title =
       stored ||
       titleFromMessage(firstUserById.get(id) || "") ||
       "Student request";
+    const lastRole = lastRoleById.get(id);
+    const awaiting_reply = lastRole !== "admin";
 
     return {
       conversation_id: id,
       title,
       updated_at: updatedById.get(id) || new Date().toISOString(),
+      awaiting_reply,
     };
+  });
+
+  // Awaiting first, then already-replied (stable within each group by updated_at desc)
+  return chats.sort((a, b) => {
+    if (a.awaiting_reply !== b.awaiting_reply) {
+      return a.awaiting_reply ? -1 : 1;
+    }
+    return Date.parse(b.updated_at) - Date.parse(a.updated_at);
   });
 }

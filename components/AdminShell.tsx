@@ -293,28 +293,63 @@ export function AdminShell({ children }: { children: ReactNode }) {
                 No admin requests yet
               </p>
             ) : (
-              requested.map((chat) => {
-                const href = `/admin/chats/${chat.conversation_id}`;
-                const active = pathname === href;
+              (() => {
+                const awaiting = requested.filter((c) => c.awaiting_reply);
+                const replied = requested.filter((c) => !c.awaiting_reply);
+
+                const renderChat = (chat: RequestedChat) => {
+                  const href = `/admin/chats/${chat.conversation_id}`;
+                  const active = pathname === href;
+                  return (
+                    <Link
+                      key={chat.conversation_id}
+                      href={href}
+                      onClick={() => setSidebarOpen(false)}
+                      className={cn(
+                        "flex items-start gap-2 rounded-md px-3 py-2 text-left font-roboto transition-colors",
+                        active
+                          ? "bg-sky-50 text-sky-800"
+                          : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                      )}
+                      title={chat.title}
+                    >
+                      {chat.awaiting_reply ? (
+                        <span
+                          className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500"
+                          aria-label="Awaiting reply"
+                          title="Awaiting reply"
+                        />
+                      ) : (
+                        <span className="mt-1.5 h-1.5 w-1.5 shrink-0" aria-hidden />
+                      )}
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 truncate text-sm leading-snug",
+                          chat.awaiting_reply
+                            ? "font-medium"
+                            : "font-normal text-slate-500"
+                        )}
+                      >
+                        {chat.title}
+                      </span>
+                    </Link>
+                  );
+                };
+
                 return (
-                  <Link
-                    key={chat.conversation_id}
-                    href={href}
-                    onClick={() => setSidebarOpen(false)}
-                    className={cn(
-                      "rounded-md px-3 py-2 text-left font-roboto transition-colors",
-                      active
-                        ? "bg-sky-50 text-sky-800"
-                        : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                    )}
-                    title={chat.title}
-                  >
-                    <span className="block truncate text-sm font-medium leading-snug">
-                      {chat.title}
-                    </span>
-                  </Link>
+                  <>
+                    {awaiting.map(renderChat)}
+                    {awaiting.length > 0 && replied.length > 0 ? (
+                      <div
+                        className="mx-3 my-1.5 border-t border-slate-200"
+                        role="separator"
+                        aria-label="Replied chats"
+                      />
+                    ) : null}
+                    {replied.map(renderChat)}
+                  </>
                 );
-              })
+              })()
             )}
           </div>
         </div>
