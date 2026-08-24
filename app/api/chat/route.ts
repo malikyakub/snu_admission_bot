@@ -18,12 +18,13 @@ import {
   lastAssistantOfferedHandoff,
   stripHandoffCta,
 } from "@/lib/handoff";
-import { detectIntent, detectIntentWithHistory, extractFacultyFromHistory } from "@/lib/intent";
-import { buildMessages, type ChatHistoryMessage } from "@/lib/prompt";
 import {
-  facultiesMentionedInText,
-  formatFeeFactsBlock,
-} from "@/lib/fees";
+  detectIntent,
+  detectIntentWithHistory,
+  extractFacultyFromHistory,
+} from "@/lib/intent";
+import { buildMessages, type ChatHistoryMessage } from "@/lib/prompt";
+import { facultiesMentionedInText, formatFeeFactsBlock } from "@/lib/fees";
 import {
   extractPhoneNumber,
   formatStudentStatus,
@@ -74,7 +75,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 /** Used when the primary model hits daily/minute rate limits. */
 const GROQ_FALLBACK_MODEL =
   process.env.GROQ_FALLBACK_MODEL || "llama-3.1-8b-instant";
@@ -103,7 +104,7 @@ function jsonError(message: string, status = 400) {
 
 function appendTextToSseStream(
   upstream: ReadableStream<Uint8Array>,
-  suffix: string
+  suffix: string,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
@@ -123,7 +124,10 @@ function appendTextToSseStream(
           buffer = parts.pop() ?? "";
 
           for (const line of parts) {
-            if (line.startsWith("data: ") && line.slice(6).trim() === "[DONE]") {
+            if (
+              line.startsWith("data: ") &&
+              line.slice(6).trim() === "[DONE]"
+            ) {
               if (!injected) {
                 const chunk = {
                   id: "snubot-handoff",
@@ -137,7 +141,7 @@ function appendTextToSseStream(
                   ],
                 };
                 controller.enqueue(
-                  encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
+                  encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`),
                 );
                 injected = true;
               }
@@ -159,7 +163,7 @@ function appendTextToSseStream(
             ],
           };
           controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
+            encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`),
           );
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         }
@@ -174,7 +178,7 @@ function appendTextToSseStream(
 
 function appendSourcesEventAfterStream(
   upstream: ReadableStream<Uint8Array>,
-  sourcesPromise: Promise<ChatSource[]>
+  sourcesPromise: Promise<ChatSource[]>,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   return new ReadableStream({
@@ -193,7 +197,7 @@ function appendSourcesEventAfterStream(
         } catch (err) {
           console.warn(
             "[/api/chat] sources event:",
-            err instanceof Error ? err.message : err
+            err instanceof Error ? err.message : err,
           );
         }
       } catch (err) {
@@ -207,7 +211,7 @@ function appendSourcesEventAfterStream(
 
 function mergeChunksBySimilarity(
   groups: KbChunkMatch[][],
-  limit: number
+  limit: number,
 ): KbChunkMatch[] {
   const byId = new Map<string, KbChunkMatch>();
   for (const group of groups) {
@@ -255,7 +259,7 @@ async function groqChatCompletions(opts: {
 
   const primaryDetail = await res.text().catch(() => "");
   console.warn(
-    `[/api/chat] ${GROQ_MODEL} rate-limited; retrying with ${GROQ_FALLBACK_MODEL}`
+    `[/api/chat] ${GROQ_MODEL} rate-limited; retrying with ${GROQ_FALLBACK_MODEL}`,
   );
 
   res = await fetch(GROQ_URL, {
@@ -274,7 +278,7 @@ async function groqChatCompletions(opts: {
         code: "rate_limit_exceeded",
         detail: primaryDetail.slice(0, 400),
       }),
-      { status: 429, headers: { "Content-Type": "application/json" } }
+      { status: 429, headers: { "Content-Type": "application/json" } },
     );
   }
 
@@ -282,9 +286,10 @@ async function groqChatCompletions(opts: {
 }
 
 /** Tee an SSE stream: forward bytes to the client while accumulating assistant text. */
-function tapSseStream(
-  upstream: ReadableStream<Uint8Array>
-): { stream: ReadableStream<Uint8Array>; textPromise: Promise<string> } {
+function tapSseStream(upstream: ReadableStream<Uint8Array>): {
+  stream: ReadableStream<Uint8Array>;
+  textPromise: Promise<string>;
+} {
   const decoder = new TextDecoder();
   let resolveText!: (t: string) => void;
   const textPromise = new Promise<string>((r) => {
@@ -357,7 +362,7 @@ export async function POST(req: Request) {
   async function jsonReply(
     conversationId: string | null,
     userMessage: string,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
   ) {
     const answer = typeof payload.answer === "string" ? payload.answer : "";
     if (skipUserSave) {
@@ -425,7 +430,7 @@ export async function POST(req: Request) {
           } catch (err) {
             console.warn(
               "[/api/chat] clear handoff_offered (small-talk):",
-              err instanceof Error ? err.message : err
+              err instanceof Error ? err.message : err,
             );
           }
         }
@@ -486,15 +491,12 @@ export async function POST(req: Request) {
           } catch (err) {
             console.warn(
               "[/api/chat] clear waiting_for_phone (topic change):",
-              err instanceof Error ? err.message : err
+              err instanceof Error ? err.message : err,
             );
           }
 
           // Enrollment intent: switch immediately (don't wait for a second turn)
-          if (
-            enrollInterest ||
-            isStartEnrollmentAffirmative(message)
-          ) {
+          if (enrollInterest || isStartEnrollmentAffirmative(message)) {
             return jsonReply(conversation?.id ?? null, message, {
               answer: startEnrollmentStubMessage(),
               conversation_id: conversation?.id ?? null,
@@ -525,19 +527,75 @@ export async function POST(req: Request) {
           });
         }
       } else {
-      if (!conversation) {
-        try {
-          conversation = await createConversation({ ipAddress: clientIp });
-        } catch (err) {
-          conversationError =
-            err instanceof Error ? err.message : "create conversation failed";
+        if (!conversation) {
+          try {
+            conversation = await createConversation({ ipAddress: clientIp });
+          } catch (err) {
+            conversationError =
+              err instanceof Error ? err.message : "create conversation failed";
+          }
         }
-      }
 
-      try {
-        const student = await findStudentByPhone(phone);
-        if (student) {
-          // Stop waiting only when we found a match
+        try {
+          const student = await findStudentByPhone(phone);
+          if (student) {
+            // Stop waiting only when we found a match
+            try {
+              if (conversation) {
+                await setWaitingForPhone(conversation.id, false);
+                conversation = { ...conversation, waiting_for_phone: false };
+              }
+            } catch (err) {
+              console.warn(
+                "[/api/chat] clear waiting_for_phone:",
+                err instanceof Error ? err.message : err,
+              );
+            }
+
+            // Link this chat so the enrollment panel can resume the same row
+            if (conversation?.id) {
+              try {
+                await linkStudentConversation(student.phone, conversation.id);
+                const resume =
+                  nextIncompleteEnrollmentStep(student) ??
+                  student.enrollment_step ??
+                  1;
+                if (isEnrollmentIncomplete(student) && resume) {
+                  await getSupabase()
+                    .from("students")
+                    .update({ enrollment_step: resume })
+                    .eq("phone", student.phone);
+                }
+              } catch (err) {
+                console.warn(
+                  "[/api/chat] link student conversation:",
+                  err instanceof Error ? err.message : err,
+                );
+              }
+            }
+
+            return jsonReply(conversation?.id ?? null, message, {
+              answer: formatStudentStatus(student),
+              conversation_id: conversation?.id ?? null,
+              needs_human: false,
+              handoff_offered: false,
+              low_confidence: false,
+              top_similarity: null,
+              intent: { ...EMPTY_INTENT, topic: "status_check" },
+              sources: [],
+              flow: "status_found",
+              resume_enrollment: isEnrollmentIncomplete(student),
+              student: {
+                phone: student.phone,
+                enrollment_status: student.enrollment_status,
+                current_step: student.current_step,
+                enrollment_step: nextIncompleteEnrollmentStep(student),
+              },
+            });
+          }
+
+          // Not found — clear wait so a topic change isn't trapped; phone retry
+          // still works via lastAssistantStatusNotFound + extractPhoneNumber.
           try {
             if (conversation) {
               await setWaitingForPhone(conversation.id, false);
@@ -545,35 +603,13 @@ export async function POST(req: Request) {
             }
           } catch (err) {
             console.warn(
-              "[/api/chat] clear waiting_for_phone:",
-              err instanceof Error ? err.message : err
+              "[/api/chat] clear waiting_for_phone after not-found:",
+              err instanceof Error ? err.message : err,
             );
           }
 
-          // Link this chat so the enrollment panel can resume the same row
-          if (conversation?.id) {
-            try {
-              await linkStudentConversation(student.phone, conversation.id);
-              const resume =
-                nextIncompleteEnrollmentStep(student) ??
-                student.enrollment_step ??
-                1;
-              if (isEnrollmentIncomplete(student) && resume) {
-                await getSupabase()
-                  .from("students")
-                  .update({ enrollment_step: resume })
-                  .eq("phone", student.phone);
-              }
-            } catch (err) {
-              console.warn(
-                "[/api/chat] link student conversation:",
-                err instanceof Error ? err.message : err
-              );
-            }
-          }
-
           return jsonReply(conversation?.id ?? null, message, {
-            answer: formatStudentStatus(student),
+            answer: statusNotFoundMessage(),
             conversation_id: conversation?.id ?? null,
             needs_human: false,
             handoff_offered: false,
@@ -581,48 +617,14 @@ export async function POST(req: Request) {
             top_similarity: null,
             intent: { ...EMPTY_INTENT, topic: "status_check" },
             sources: [],
-            flow: "status_found",
-            resume_enrollment: isEnrollmentIncomplete(student),
-            student: {
-              phone: student.phone,
-              enrollment_status: student.enrollment_status,
-              current_step: student.current_step,
-              enrollment_step: nextIncompleteEnrollmentStep(student),
-            },
+            flow: "status_not_found",
+            looked_up: normalizePhoneDigits(phone),
           });
-        }
-
-        // Not found — clear wait so a topic change isn't trapped; phone retry
-        // still works via lastAssistantStatusNotFound + extractPhoneNumber.
-        try {
-          if (conversation) {
-            await setWaitingForPhone(conversation.id, false);
-            conversation = { ...conversation, waiting_for_phone: false };
-          }
         } catch (err) {
-          console.warn(
-            "[/api/chat] clear waiting_for_phone after not-found:",
-            err instanceof Error ? err.message : err
-          );
+          const msg = err instanceof Error ? err.message : "lookup failed";
+          console.error("[/api/chat] student lookup:", msg);
+          return jsonError(`Student lookup failed: ${msg}`, 500);
         }
-
-        return jsonReply(conversation?.id ?? null, message, {
-          answer: statusNotFoundMessage(),
-          conversation_id: conversation?.id ?? null,
-          needs_human: false,
-          handoff_offered: false,
-          low_confidence: false,
-          top_similarity: null,
-          intent: { ...EMPTY_INTENT, topic: "status_check" },
-          sources: [],
-          flow: "status_not_found",
-          looked_up: normalizePhoneDigits(phone),
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "lookup failed";
-        console.error("[/api/chat] student lookup:", msg);
-        return jsonError(`Student lookup failed: ${msg}`, 500);
-      }
       }
     }
 
@@ -637,7 +639,9 @@ export async function POST(req: Request) {
         conversationError = null;
       } catch (err) {
         conversationError =
-          err instanceof Error ? err.message : "failed to set waiting_for_phone";
+          err instanceof Error
+            ? err.message
+            : "failed to set waiting_for_phone";
         console.warn("[/api/chat] waiting_for_phone:", conversationError);
         if (!conversation) {
           try {
@@ -682,7 +686,7 @@ export async function POST(req: Request) {
       } catch (err) {
         console.warn(
           "[/api/chat] clear handoff_offered:",
-          err instanceof Error ? err.message : err
+          err instanceof Error ? err.message : err,
         );
       }
       // Pure ack/decline ("no need", "nevermind") — don't fall into RAG handoff loop
@@ -816,7 +820,7 @@ export async function POST(req: Request) {
       ]);
       chunks = mergeChunksBySimilarity(
         [placementChunks, examChunks],
-        TOP_K + 2
+        TOP_K + 2,
       );
       if (chunks.length === 0) {
         chunks = await searchKbChunks(embedding, { matchCount: TOP_K });
@@ -859,10 +863,7 @@ export async function POST(req: Request) {
           bestSim = top;
         }
         // Strong filtered hit — no need to keep searching looser filters
-        if (
-          top >= 0.55 &&
-          (filters.topic != null || filters.faculty != null)
-        ) {
+        if (top >= 0.55 && (filters.topic != null || filters.faculty != null)) {
           break;
         }
       }
@@ -894,12 +895,12 @@ export async function POST(req: Request) {
             : null;
       const comparison =
         /\b(cheaper|cheap|cheapest|expensive|more expensive|affordable|vs\.?|versus|compared?)\b/i.test(
-          message
+          message,
         );
       // Comparisons / open fee questions get the full rate table; otherwise focus.
       feeFactsBlock = formatFeeFactsBlock(
         comparison || !faculties || faculties.length === 0 ? null : faculties,
-        { annualFee: intent.annualFee }
+        { annualFee: intent.annualFee },
       );
     }
 
@@ -926,7 +927,7 @@ export async function POST(req: Request) {
         return jsonError(
           payload?.error ||
             "The AI service is temporarily rate-limited. Please wait a minute and try again.",
-          429
+          429,
         );
       }
       const detail = await groqRes.text();
@@ -957,7 +958,7 @@ export async function POST(req: Request) {
       } catch (err) {
         console.warn(
           "[/api/chat] clear handoff_offered:",
-          err instanceof Error ? err.message : err
+          err instanceof Error ? err.message : err,
         );
       }
     }
@@ -997,14 +998,14 @@ export async function POST(req: Request) {
         return stripHandoffCta(text);
       });
       const sourcesPromise = cleanedPromise.then((text) =>
-        sourcesUsedInAnswer(chunks, text)
+        sourcesUsedInAnswer(chunks, text),
       );
       // User then assistant, sequentially after the response (avoids ordering races)
       saveUserAndAssistantWhenReady(conversationId, message, cleanedPromise);
 
       const streamWithSources = appendSourcesEventAfterStream(
         streamOut,
-        sourcesPromise
+        sourcesPromise,
       );
 
       return new Response(streamWithSources, {
