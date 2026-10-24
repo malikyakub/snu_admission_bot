@@ -4,52 +4,28 @@
  *   2. The conflict/disambiguation chunk -> replaced with canonical fee breakdown
  *
  * Run:  node scripts/update_fees_chunks.js
- * Requires:  SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, HF_API_TOKEN in .env
+ * Requires:  SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, CLOUDFLARE_ACCOUNT_ID,
+ *            CLOUDFLARE_API_TOKEN in .env  (Node 22.18+ / 23.6+ for .ts require)
  */
 
 require("dotenv").config({ path: ".env" });
 
 const { createClient } = require("@supabase/supabase-js");
 const fs = require("fs");
+const { embedDocument } = require("../lib/embeddings.ts");
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
-const HF_TOKEN = process.env.HF_API_TOKEN;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error("Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY");
-  process.exit(1);
-}
-if (!HF_TOKEN) {
-  console.error("Missing HF_API_TOKEN");
   process.exit(1);
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: false },
 });
-
-async function embed(text) {
-  const res = await fetch(
-    "https://api-inference.huggingface.co/models/BAAI/bge-base-en-v1.5",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${HF_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ inputs: text, options: { wait_for_model: true } }),
-    }
-  );
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`HF embed error ${res.status}: ${t}`);
-  }
-  const data = await res.json();
-  // Returns either a flat array or array-of-arrays
-  return Array.isArray(data[0]) ? data[0] : data;
-}
 
 async function main() {
   const chunks = JSON.parse(fs.readFileSync("kb_chunks.json", "utf8"));
@@ -59,7 +35,7 @@ async function main() {
 
   for (const chunk of feesChunks) {
     console.log(`\nEmbedding chunk (${chunk.content.slice(0, 60)}...)`);
-    const embedding = await embed(chunk.content);
+    const embedding = await embedDocument(chunk.content);
     console.log(`  Embedding length: ${embedding.length}`);
 
     // Find existing row by content match (first 100 chars) or topic+confidence

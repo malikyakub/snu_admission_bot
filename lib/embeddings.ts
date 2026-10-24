@@ -1,5 +1,6 @@
 const OLLAMA_MODEL = process.env.OLLAMA_EMBED_MODEL || "bge-base-en-v1.5";
-const HF_MODEL = process.env.HF_EMBED_MODEL || "BAAI/bge-base-en-v1.5";
+const CF_MODEL = "@cf/baai/bge-base-en-v1.5";
+const EMBEDDING_DIMS = 768;
 
 /** BGE retrieval query prefix (documents are embedded without this). */
 const BGE_QUERY_PREFIX =
@@ -8,43 +9,28 @@ const BGE_QUERY_PREFIX =
 /**
  * Query embedding for RAG — always `BAAI/bge-base-en-v1.5` (768-dim).
  *
- * Ollama does **not** officially host `bge-base-en-v1.5`, so the default path
- * is Hugging Face Inference (`HF_API_TOKEN`) for both local and Vercel.
- * That keeps ingest + query in the same vector space.
+ * Default path is Cloudflare Workers AI (`@cf/baai/bge-base-en-v1.5`) for both
+ * local and Vercel. Needs `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`
+ * (token with the "Workers AI" read permission).
  *
  * Optional: `EMBEDDING_PROVIDER=ollama` if you have a local community port
- * under `OLLAMA_EMBED_MODEL` — not recommended (may diverge from HF weights).
- *
- * HF token needs **Make calls to Inference Providers**:
- * https://huggingface.co/settings/tokens
+ * under `OLLAMA_EMBED_MODEL` — not recommended (may diverge from these weights).
  */
 export async function embedQuery(text: string): Promise<number[]> {
-  const provider = (process.env.EMBEDDING_PROVIDER || "hf").toLowerCase();
+  const provider = (process.env.EMBEDDING_PROVIDER || "cloudflare").toLowerCase();
   const ollamaUrl = process.env.OLLAMA_URL;
-  const hfToken = process.env.HF_API_TOKEN;
   const queryText = `${BGE_QUERY_PREFIX}${text}`;
 
   if (provider === "ollama" && ollamaUrl) {
     return embedWithOllama(queryText, ollamaUrl);
   }
 
-  if (hfToken) {
-    return embedWithHuggingFace(queryText, hfToken);
-  }
-
-  throw new Error(
-    "HF_API_TOKEN is not set. Embedding uses Hugging Face BAAI/bge-base-en-v1.5 " +
-      "(Ollama does not host this model)."
-  );
+  return embedWithCloudflare(queryText);
 }
 
 /** Document embedding (no BGE query prefix) — used by ingest. */
 export async function embedDocument(text: string): Promise<number[]> {
-  const hfToken = process.env.HF_API_TOKEN;
-  if (!hfToken) {
-    throw new Error("HF_API_TOKEN is not set");
-  }
-  return embedWithHuggingFace(text, hfToken);
+  return embedWithCloudflare(text);
 }
 
 async function embedWithOllama(
@@ -71,11 +57,26 @@ async function embedWithOllama(
   return data.embedding;
 }
 
-async function embedWithHuggingFace(
-  text: string,
-  token: string
-): Promise<number[]> {
-  const url = `https://router.huggingface.co/hf-inference/models/${HF_MODEL}/pipeline/feature-extraction`;
+type CloudflareAiResponse = {
+  success?: boolean;
+  errors?: { code?: number; message?: string }[];
+  result?: { shape?: number[]; data?: number[][] };
+};
+
+async function embedWithCloudflare(text: string): Promise<number[]> {
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const token = process.env.CLOUDFLARE_API_TOKEN;
+  const missing = [
+    !accountId && "CLOUDFLARE_ACCOUNT_ID",
+    !token && "CLOUDFLARE_API_TOKEN",
+  ].filter(Boolean);
+  if (missing.length > 0) {
+    throw new Error(
+      `${missing.join(" and ")} not set. Embedding uses Cloudflare Workers AI ${CF_MODEL}.`
+    );
+  }
+
+  const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${CF_MODEL}`;
 
   const res = await fetch(url, {
     method: "POST",
@@ -83,65 +84,45 @@ async function embedWithHuggingFace(
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      inputs: text,
-      options: { wait_for_model: true },
-    }),
+    // CLS pooling matches the sentence-transformers config for this model,
+    // which is what the existing kb_chunks vectors were embedded with.
+    // Workers AI defaults to mean pooling, which is not compatible.
+    body: JSON.stringify({ text: [text], pooling: "cls" }),
   });
 
-  if (!res.ok) {
-    const detail = await res.text();
-    if (res.status === 403) {
-      throw new Error(
-        `Hugging Face embedding forbidden (403). Create a fine-grained token with ` +
-          `"Make calls to Inference Providers" and set HF_API_TOKEN. Details: ${detail}`
-      );
-    }
-    throw new Error(`Hugging Face embedding failed (${res.status}): ${detail}`);
+  const raw = await res.text();
+  let data: CloudflareAiResponse | undefined;
+  try {
+    data = JSON.parse(raw) as CloudflareAiResponse;
+  } catch {
+    data = undefined;
   }
 
-  const data: unknown = await res.json();
-  const embedding = normalizeHfEmbedding(data);
+  if (!res.ok || !data?.success) {
+    const detail =
+      data?.errors?.map((e) => `${e.code}: ${e.message}`).join("; ") || raw;
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(
+        `Cloudflare Workers AI embedding unauthorized (${res.status}). Check that ` +
+          `CLOUDFLARE_API_TOKEN has the "Workers AI" permission and ` +
+          `CLOUDFLARE_ACCOUNT_ID is correct. Details: ${detail}`
+      );
+    }
+    throw new Error(
+      `Cloudflare Workers AI embedding failed (${res.status}): ${detail}`
+    );
+  }
 
-  if (embedding.length === 0) {
-    throw new Error("Hugging Face returned an empty embedding");
+  const embedding = data.result?.data?.[0];
+  if (!Array.isArray(embedding) || embedding.length === 0) {
+    throw new Error("Cloudflare Workers AI returned an empty embedding");
+  }
+  if (embedding.length !== EMBEDDING_DIMS) {
+    throw new Error(
+      `Cloudflare Workers AI returned a ${embedding.length}-dim embedding; ` +
+        `expected ${EMBEDDING_DIMS} (kb_chunks is vector(${EMBEDDING_DIMS}))`
+    );
   }
 
   return embedding;
-}
-
-/** Flatten HF feature-extraction payloads into a single 768-d vector. */
-function normalizeHfEmbedding(data: unknown): number[] {
-  if (!Array.isArray(data) || data.length === 0) {
-    throw new Error("Unexpected Hugging Face embedding response shape");
-  }
-
-  if (typeof data[0] === "number") {
-    return data as number[];
-  }
-
-  if (Array.isArray(data[0]) && typeof (data[0] as unknown[])[0] === "number") {
-    return meanPool(data as number[][]);
-  }
-
-  if (
-    Array.isArray(data[0]) &&
-    Array.isArray((data[0] as unknown[])[0]) &&
-    typeof ((data[0] as unknown[])[0] as unknown[])[0] === "number"
-  ) {
-    return meanPool((data as number[][][])[0]);
-  }
-
-  throw new Error("Unexpected Hugging Face embedding response shape");
-}
-
-function meanPool(tokenVectors: number[][]): number[] {
-  if (tokenVectors.length === 0) return [];
-  const dims = tokenVectors[0].length;
-  const out = new Array<number>(dims).fill(0);
-  for (const token of tokenVectors) {
-    for (let i = 0; i < dims; i++) out[i] += token[i];
-  }
-  for (let i = 0; i < dims; i++) out[i] /= tokenVectors.length;
-  return out;
 }
