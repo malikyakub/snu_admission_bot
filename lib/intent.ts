@@ -595,3 +595,22 @@ export function detectIntentWithHistory(
 
   return intent;
 }
+
+const QUESTION_LEAD =
+  "(?:also\\s+\\w|(?:can|could|what|how|is|are|do|does|did|when|where|which|who|why|will|would|should|am|if)\\b)";
+
+/**
+ * Split a stacked message ("What documents do I need, and can I apply if…?")
+ * into its sub-questions, in order. Returns [message] when it is one question.
+ */
+export function splitQuestions(message: string): string[] {
+  const t = message.normalize("NFKC").replace(/\s+/g, " ").trim();
+  const pieces = t
+    .split(/(?<=\?)\s+/)
+    .flatMap((p) =>
+      p.split(new RegExp(`\\s*(?:,\\s*|\\s+)(?:and|plus)\\s+(?=${QUESTION_LEAD})`, "i"))
+    )
+    .map((p) => p.replace(/^[,;\s]+|[,;\s]+$/g, "").trim())
+    .filter((p) => p.split(" ").length >= 3);
+  return pieces.length > 1 ? pieces.slice(0, 3) : [t];
+}

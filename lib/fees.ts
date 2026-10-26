@@ -1,7 +1,7 @@
 /**
  * Canonical SNU undergraduate fee FACTS for prompt injection.
- * The LLM calculates totals step-by-step from these components — we do not
- * inject precomputed full-programme totals.
+ * Full-programme totals are precomputed here so the model can present a plain
+ * breakdown without doing (or showing) the arithmetic itself.
  */
 
 /** Flat one-time / universal fees. */
@@ -85,7 +85,7 @@ export function facultiesMentionedInText(text: string): string[] {
 }
 
 /**
- * Raw fee-component facts for the LLM. No precomputed totals.
+ * Fee facts for the LLM, with a precomputed breakdown per faculty.
  * When `faculties` is null/empty, include the full per-semester rate table.
  */
 export function formatFeeFactsBlock(
@@ -97,39 +97,39 @@ export function formatFeeFactsBlock(
       ? faculties.filter((f) => FACULTY_SEMESTER_RATE[f] != null)
       : Object.keys(FACULTY_SEMESTER_RATE);
 
-  const rateLines = focus.map((f) => {
+  // Precomputed per-faculty breakdowns so the model never has to show formulas
+  const facultyLines = focus.map((f) => {
     const rate = FACULTY_SEMESTER_RATE[f];
     const years = FACULTY_ORIGINAL_YEARS[f];
-    const origSem = years * 2;
-    const totalSem = origSem + FOUNDATION_EXTRA_SEMESTERS;
-    return `- **${f}**: $${rate}/semester | original degree ${years} years (${origSem} semesters) → with Foundation: ${totalSem} semesters (${years + 1} years total enrollment)`;
+    const totalSem = years * 2 + FOUNDATION_EXTRA_SEMESTERS;
+    const renewals = Math.floor(totalSem / 4);
+    const semesterTotal = rate * totalSem;
+    const total = expectedFullProgramTotal(f);
+    return (
+      `- ${f}: $${rate} per semester ($${rate * 2} per year). Degree is ${years} years, plus the 1-year Foundation = ${years + 1} years (${totalSem} semesters) in total.\n` +
+      `  Full-programme breakdown: exam $${FEE_EXAM} + registration $${FEE_ADMIN_REGISTRATION} + Foundation/EAP $${FEE_EAP} + semester fees $${semesterTotal.toLocaleString("en-US")} ($${rate} × ${totalSem} semesters) + ID renewals $${FEE_ID_RENEWAL * renewals} (${renewals} × $${FEE_ID_RENEWAL}) = $${total?.toLocaleString("en-US")}`
+    );
   });
 
   const annualHint = opts?.annualFee
-    ? `\nYearly/annual recurring cost for a faculty = 2 × that faculty's per-semester rate (tuition is free). Do NOT assume $125/semester or $250/year for every faculty.`
+    ? `\nThe student asked about yearly cost: use the faculty's per-year figure above (2 semesters). Do NOT assume $125/semester for every faculty.`
     : "";
 
   return (
-    `FEE_FACTS (authoritative components — calculate totals yourself step-by-step; show the arithmetic; do NOT invent other fee items):\n` +
-    `One-time / universal:\n` +
-    `- Exam fee: $${FEE_EXAM} (paid before the exam, all faculties)\n` +
-    `- Admin/registration charge: $${FEE_ADMIN_REGISTRATION} (one-time, after passing, all faculties — NOT the per-semester table)\n` +
-    `- Foundation/EAP programme: $${FEE_EAP} (one-time; mandatory 1-year Foundation since 2023/2024, all faculties)\n` +
-    `- ID card renewal: $${FEE_ID_RENEWAL} every 2 years of total enrollment (including the Foundation year)\n` +
-    `Per-semester service fee (varies by faculty — paid every semester, including Foundation semesters):\n` +
-    `${rateLines.join("\n")}\n` +
-    `How to compute a full-programme total:\n` +
-    `1. totalSemesters = originalSemesters + ${FOUNDATION_EXTRA_SEMESTERS} (Foundation year)\n` +
-    `2. renewals = floor(totalSemesters / 4)  // one $10 renewal per 2 years\n` +
-    `3. total = $${FEE_EXAM} + $${FEE_ADMIN_REGISTRATION} + $${FEE_EAP} + (facultySemesterRate × totalSemesters) + ($${FEE_ID_RENEWAL} × renewals)\n` +
-    `Tuition is FREE. Never treat the Administrative Charges table as a one-time admin fee. Never use a flat $125/semester for every faculty.` +
+    `FEE_FACTS (authoritative; prefer these over older fee passages):\n` +
+    `One-time fees (all faculties):\n` +
+    `- Exam fee: $${FEE_EXAM}, paid before the admission exam\n` +
+    `- Registration charge: $${FEE_ADMIN_REGISTRATION}, paid once after passing the exam\n` +
+    `- Foundation/EAP programme: $${FEE_EAP}, paid once (the 1-year Foundation is mandatory for every faculty)\n` +
+    `- Student ID renewal: $${FEE_ID_RENEWAL} every 2 years of study (Foundation year included)\n` +
+    `Per-semester service fee (differs by faculty, paid every semester including the Foundation semesters):\n` +
+    `${facultyLines.join("\n")}` +
     annualHint
   );
 }
 
 /**
- * Reference helper for tests only — mirrors the step-by-step formula the model should use.
- * Not injected into prompts.
+ * Full-programme total for a faculty (also used for the FEE_FACTS breakdown).
  */
 export function expectedFullProgramTotal(faculty: string): number | null {
   const rate = FACULTY_SEMESTER_RATE[faculty];

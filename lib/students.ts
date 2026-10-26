@@ -149,3 +149,9 @@ export async function linkStudentConversation(
     throw new Error(`link conversation failed: ${error.message}`);
   }
 }
+
+/** True for a Somali mobile number (61 234 5678, 0612345678, +252 61 234 5678). */
+export function isValidSomaliMobile(raw: string): boolean {
+  const d = normalizePhoneDigits(raw);
+  return /^252[67]\d{8}$/.test(d) || /^[67]\d{8}$/.test(d);
+}

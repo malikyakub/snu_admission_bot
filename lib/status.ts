@@ -455,3 +455,113 @@ export function startEnrollmentStubMessage(): string {
     ctaMarker("enroll", "Start your application")
   );
 }
+
+/* ------------------------------------------------------------------ */
+/* Identity check before revealing status                              */
+/* ------------------------------------------------------------------ */
+
+const VERIFY_ASK =
+  "I found an application under that number. To confirm it's you, please reply with your mother's name or your exam roll number.";
+
+const VERIFY_RETRY =
+  "That doesn't match the application on file. Please try again with your mother's name or your exam roll number.";
+
+const VERIFY_FAILED =
+  "Sorry, I couldn't confirm your identity, so I can't share that application's status. An admin can help you with this.\n\n" +
+  ctaMarker("handoff", "Connect with an admin");
+
+/** Wrong answers allowed before the bot stops asking. */
+const MAX_VERIFY_ATTEMPTS = 3;
+
+export function statusVerifyAskMessage(): string {
+  return VERIFY_ASK;
+}
+
+/** Last assistant turn asked for mother's name / exam roll number. */
+export function lastAssistantAskedForVerification(
+  history: { role: string; content: string }[]
+): boolean {
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role === "assistant") {
+      return /mother's name or your exam roll number/i.test(history[i].content);
+    }
+  }
+  return false;
+}
+
+/** Failed answers so far in the current verification run. */
+function verificationFailures(
+  history: { role: string; content: string }[]
+): number {
+  let n = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role !== "assistant") continue;
+    if (history[i].content === VERIFY_RETRY) n += 1;
+    else break;
+  }
+  return n;
+}
+
+/** Retry prompt, or a final refusal once attempts run out. */
+export function statusVerifyFailedMessage(
+  history: { role: string; content: string }[]
+): { answer: string; exhausted: boolean } {
+  const exhausted = verificationFailures(history) + 1 >= MAX_VERIFY_ATTEMPTS;
+  return { answer: exhausted ? VERIFY_FAILED : VERIFY_RETRY, exhausted };
+}
+
+/** Most recent phone number the student typed in this chat. */
+export function phoneFromHistory(
+  history: { role: string; content: string }[]
+): string | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role !== "user") continue;
+    const phone = extractPhoneNumber(history[i].content);
+    if (phone) return phone;
+  }
+  return null;
+}
+
+function normalizeAnswer(v: string): string {
+  return v
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^a-z0-9À-ɏ\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** True when the reply matches the student's mother's name or exam roll number. */
+export function verifiesStudent(
+  reply: string,
+  student: Partial<EnrollmentData> & { mother_name?: string | null }
+): boolean {
+  const said = normalizeAnswer(reply);
+  if (!said) return false;
+
+  const roll = (student.exam_roll_number ?? "").replace(/\s+/g, "").toLowerCase();
+  if (roll && said.replace(/\s+/g, "").includes(roll)) return true;
+
+  for (const name of [student.mothers_name, student.mother_name]) {
+    const stored = normalizeAnswer(name ?? "");
+    if (!stored) continue;
+    // Full name typed (possibly inside a sentence), or at least first + second name
+    if (said.includes(stored)) return true;
+    const storedParts = stored.split(" ");
+    if (storedParts.length >= 2 && said.includes(storedParts.slice(0, 2).join(" "))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Message is just a phone number ("61 234 5678", "my number is 61xxxxxxx"). */
+export function isBarePhoneMessage(message: string): boolean {
+  const t = message.normalize("NFKC").replace(/\s+/g, " ").trim();
+  if (!t || t.length > 60 || t.includes("?")) return false;
+  const number = t.replace(
+    /^(?:my\s+)?(?:phone|mobile|tel(?:ephone)?)?(?:\s*number)?\s*(?:is|:)?\s*/i,
+    "",
+  );
+  return /^\+?[\dx][\dx\s\-().]{5,}$/i.test(number) && /\d/.test(number);
+}

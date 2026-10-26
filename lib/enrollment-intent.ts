@@ -22,6 +22,8 @@ const ENROLL_PATTERNS: RegExp[] = [
   /\bapplication\s+process\b/i,
   /\bwant\s+to\s+(apply|join|enroll)\b/i,
   /\bget\s+me\s+(enrolled|registered|admitted)\b/i,
+  // Naming the faculties they want ("I want Medicine as my first choice")
+  /\bas\s+my\s+((first|second|third|1st|2nd|3rd)\s+)?(faculty\s+)?choices?\b/i,
   // Casual “I’m in” / missing-link follow-ups
   /\bi\s+want\s+in\b/i,
   /\bi'?m\s+in\b/i,

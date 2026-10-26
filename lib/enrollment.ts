@@ -256,17 +256,18 @@ export function isTier1(faculty: string): boolean {
   return (TIER_1_FACULTIES as readonly string[]).includes(faculty);
 }
 
-/** Returns allowed faculties for a choice slot.
- *  Tier 1 programs (Medicine, Science, Engineering, Economic & Management)
- *  may only be selected as 1st choice — never as 2nd or 3rd.
+/** Returns allowed faculties for a choice slot, given the other slots' picks.
+ *  At most one Tier 1 faculty (Medicine, Science, Engineering, Economic &
+ *  Management) may appear across all three choices, in any slot.
  */
 export function allowedFaculties(
   alreadyChosen: string[],
-  slot: 1 | 2 | 3 = 2
+  _slot: 1 | 2 | 3 = 2
 ): Faculty[] {
+  const hasTier1 = alreadyChosen.some(isTier1);
   return ALL_FACULTIES.filter((f) => {
     if (alreadyChosen.includes(f)) return false;
-    if (slot > 1 && isTier1(f)) return false;
+    if (hasTier1 && isTier1(f)) return false;
     return true;
   });
 }

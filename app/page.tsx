@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { EnrollmentPanel } from "@/components/EnrollmentPanel";
 import { useToast } from "@/components/Toast";
-import { parseCtaContent, ctaMarker, type CtaKind } from "@/lib/cta";
+import { parseCtaContent, ctaMarker, hasCta, type CtaKind } from "@/lib/cta";
 import {
   enrollmentCtaMessage,
   enrollmentWelcomeMessage,
@@ -700,11 +700,8 @@ export default function HomePage() {
       const jsonSources = normalizeChatSources(
         Array.isArray(json?.sources) ? json.sources : headerSources
       );
-      let answer = (json?.answer as string | undefined) ?? "";
-      // Belts-and-braces: never keep a handoff CTA on a high-confidence turn
-      if (json?.low_confidence !== true) {
-        answer = answer.replace(/\[\[cta:handoff(?:\|[^\]]+)?\]\]/gi, "").trim();
-      }
+      // The server decides when the admin button belongs (no-answer, dispute, request)
+      const answer = (json?.answer as string | undefined) ?? "";
       return {
         answer,
         connectedToAdmin: json?.needs_human === true,
@@ -714,11 +711,6 @@ export default function HomePage() {
     }
 
     // SSE streaming path
-    const lowConfHdr =
-      res.headers.get("x-snubot-low-confidence") ??
-      res.headers.get("X-SNUBot-Low-Confidence");
-    const streamLowConfidence = lowConfHdr === "1";
-
     const reader  = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "", assistantText = "";
@@ -768,24 +760,6 @@ export default function HomePage() {
       }
     } finally {
       reader.releaseLock();
-    }
-
-    if (!streamLowConfidence) {
-      const cleaned = assistantText
-        .replace(/\[\[cta:handoff(?:\|[^\]]+)?\]\]/gi, "")
-        .replace(/\n{3,}/g, "\n\n")
-        .trim();
-      if (cleaned !== assistantText) {
-        assistantText = cleaned;
-        setMessages((prev) => {
-          const next = [...prev];
-          const last = next.length - 1;
-          if (next[last]?.role === "assistant") {
-            next[last] = { ...next[last], content: assistantText };
-          }
-          return next;
-        });
-      }
     }
 
     return {
@@ -943,7 +917,7 @@ export default function HomePage() {
       // After 3 consecutive faculty questions, offer enrollment CTA (clickable)
       const userMsgs = history.filter((m) => m.role === "user").map((m) => m.content);
       const cta = shouldOfferEnrollmentCta(userMsgs, enrollCtaOffered.current);
-      if (cta && answer) {
+      if (cta && answer && !hasCta(answer, "enroll")) {
         answer += enrollmentCtaMessage(cta.faculty);
         enrollCtaOffered.current = true;
       }

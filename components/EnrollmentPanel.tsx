@@ -401,8 +401,8 @@ function Step8({ data, onSubmit, onBack }: StepProps) {
       </div>
       <p className="text-xs text-slate-500">
         Note: Medicine &amp; Surgery, Science, Engineering, and Economic &amp;
-        Management Science are Tier 1 — they can only be your{" "}
-        <strong>1st choice</strong>, and you may pick only one of them.
+        Management Science are Tier 1 — you may pick{" "}
+        <strong>at most one</strong> of them across your three choices.
       </p>
     </StepShell>
   );
@@ -411,7 +411,6 @@ function Step8({ data, onSubmit, onBack }: StepProps) {
 function Step9({ data, onSubmit, onBack }: StepProps) {
   const firstChoice = data.faculty_choice_1 ?? "";
   const first = firstChoice ? [firstChoice] : [];
-  const allowed2 = allowedFaculties(first, 2);
 
   const [choice2, setChoice2] = useState(() => {
     const initial = data.faculty_choice_2 ?? "";
@@ -425,6 +424,8 @@ function Step9({ data, onSubmit, onBack }: StepProps) {
   });
   const [loading, setLoading] = useState(false);
 
+  // Each dropdown excludes the other two picks (and a second Tier 1)
+  const allowed2 = allowedFaculties([...first, choice3].filter(Boolean) as string[], 2);
   const chosenFor3 = [...first, choice2].filter(Boolean) as string[];
   const allowed3 = allowedFaculties(chosenFor3, 3);
 

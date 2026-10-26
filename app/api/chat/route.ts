@@ -1,7 +1,6 @@
 import {
   createConversation,
   getOrCreateConversation,
-  markHandoffOffered,
   clearHandoffOffered,
   markNeedsHuman,
   setWaitingForPhone,
@@ -9,49 +8,54 @@ import {
 import { clientIpFromHeaders } from "@/lib/request-ip";
 import { embedQuery } from "@/lib/embeddings";
 import {
-  appendHandoffOffer,
   handoffConfirmMessage,
   isAffirmativeHandoff,
   isHandoffDecline,
   isClarificationFollowUp,
   isLowConfidence,
   lastAssistantOfferedHandoff,
-  stripHandoffCta,
 } from "@/lib/handoff";
 import {
   detectIntent,
   detectIntentWithHistory,
-  extractFacultyFromHistory,
+  splitQuestions,
+  type ChatIntent,
 } from "@/lib/intent";
 import { buildMessages, type ChatHistoryMessage } from "@/lib/prompt";
 import { facultiesMentionedInText, formatFeeFactsBlock } from "@/lib/fees";
 import {
   extractPhoneNumber,
   formatStudentStatus,
+  isBarePhoneMessage,
   isGreeting,
   isStartEnrollmentAffirmative,
   isStatusCheckIntent,
   lastAssistantAskedForPhone,
+  lastAssistantAskedForVerification,
   lastAssistantOfferedStartEnrollment,
   lastAssistantStatusNotFound,
+  phoneFromHistory,
   shouldExitPhoneWait,
   smallTalkReply,
   startEnrollmentStubMessage,
   statusAskForPhoneMessage,
   statusNotFoundMessage,
+  statusVerifyAskMessage,
+  statusVerifyFailedMessage,
+  verifiesStudent,
 } from "@/lib/status";
 import {
   enrollmentCtaMessage,
-  isEnrollInterest,
   isEnrollInterestWithHistory,
   resolveFacultyFromMessage,
-  withEnrollmentOffer,
 } from "@/lib/enrollment-intent";
-import { ctaMarker } from "@/lib/cta";
+import { ctaMarker, hasCta } from "@/lib/cta";
 import {
   findStudentByPhone,
+  isValidSomaliMobile,
   linkStudentConversation,
   normalizePhoneDigits,
+  type StudentStatus,
 } from "@/lib/students";
 import {
   isEnrollmentIncomplete,
@@ -102,14 +106,28 @@ function jsonError(message: string, status = 400) {
   return Response.json({ error: message }, { status });
 }
 
+/** Append text to an SSE stream once the model finishes; `suffixFor` sees the full answer. */
 function appendTextToSseStream(
   upstream: ReadableStream<Uint8Array>,
-  suffix: string,
+  suffixFor: (text: string) => string,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   let buffer = "";
+  let text = "";
   let injected = false;
+
+  function inject(controller: ReadableStreamDefaultController<Uint8Array>) {
+    injected = true;
+    const suffix = suffixFor(text);
+    if (!suffix) return;
+    const chunk = {
+      id: "snubot-suffix",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: { content: suffix }, finish_reason: null }],
+    };
+    controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+  }
 
   return new ReadableStream({
     async start(controller) {
@@ -124,29 +142,21 @@ function appendTextToSseStream(
           buffer = parts.pop() ?? "";
 
           for (const line of parts) {
-            if (
-              line.startsWith("data: ") &&
-              line.slice(6).trim() === "[DONE]"
-            ) {
-              if (!injected) {
-                const chunk = {
-                  id: "snubot-handoff",
-                  object: "chat.completion.chunk",
-                  choices: [
-                    {
-                      index: 0,
-                      delta: { content: suffix },
-                      finish_reason: null,
-                    },
-                  ],
-                };
-                controller.enqueue(
-                  encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`),
-                );
-                injected = true;
+            if (line.startsWith("data: ")) {
+              const payload = line.slice(6).trim();
+              if (payload === "[DONE]") {
+                if (!injected) inject(controller);
+                controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                continue;
               }
-              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-              continue;
+              try {
+                const d = JSON.parse(payload) as {
+                  choices?: { delta?: { content?: string } }[];
+                };
+                text += d.choices?.[0]?.delta?.content ?? "";
+              } catch {
+                /* not a JSON chunk */
+              }
             }
             controller.enqueue(encoder.encode(`${line}\n`));
           }
@@ -155,16 +165,7 @@ function appendTextToSseStream(
           controller.enqueue(encoder.encode(buffer));
         }
         if (!injected) {
-          const chunk = {
-            id: "snubot-handoff",
-            object: "chat.completion.chunk",
-            choices: [
-              { index: 0, delta: { content: suffix }, finish_reason: null },
-            ],
-          };
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`),
-          );
+          inject(controller);
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         }
       } catch (err) {
@@ -470,15 +471,111 @@ export async function POST(req: Request) {
       });
     }
 
-    // --- Phone lookup (status check follow-up / retry after not-found) ---
+    /** Link this chat to the verified student's row and reply with their status. */
+    async function revealStatus(student: StudentStatus) {
+      try {
+        if (conversation) {
+          await setWaitingForPhone(conversation.id, false);
+          conversation = { ...conversation, waiting_for_phone: false };
+        }
+      } catch (err) {
+        console.warn(
+          "[/api/chat] clear waiting_for_phone:",
+          err instanceof Error ? err.message : err,
+        );
+      }
+
+      // Link this chat so the enrollment panel can resume the same row
+      if (conversation?.id) {
+        try {
+          await linkStudentConversation(student.phone, conversation.id);
+          const resume =
+            nextIncompleteEnrollmentStep(student) ??
+            student.enrollment_step ??
+            1;
+          if (isEnrollmentIncomplete(student) && resume) {
+            await getSupabase()
+              .from("students")
+              .update({ enrollment_step: resume })
+              .eq("phone", student.phone);
+          }
+        } catch (err) {
+          console.warn(
+            "[/api/chat] link student conversation:",
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+
+      return jsonReply(conversation?.id ?? null, message, {
+        answer: formatStudentStatus(student),
+        conversation_id: conversation?.id ?? null,
+        needs_human: false,
+        handoff_offered: false,
+        low_confidence: false,
+        top_similarity: null,
+        intent: { ...EMPTY_INTENT, topic: "status_check" },
+        sources: [],
+        flow: "status_found",
+        resume_enrollment: isEnrollmentIncomplete(student),
+        student: {
+          phone: student.phone,
+          enrollment_status: student.enrollment_status,
+          current_step: student.current_step,
+          enrollment_step: nextIncompleteEnrollmentStep(student),
+        },
+      });
+    }
+
     const phoneInMessage = extractPhoneNumber(message);
+
+    // --- Identity check: mother's name or exam roll number before revealing status ---
+    const leavingVerification =
+      message.includes("?") ||
+      (shouldExitPhoneWait(message) && message.length > 60);
+    if (lastAssistantAskedForVerification(history) && !leavingVerification) {
+      const verifyPhone = phoneFromHistory(history);
+      try {
+        const student = verifyPhone ? await findStudentByPhone(verifyPhone) : null;
+        if (student && verifiesStudent(message, student)) {
+          return revealStatus(student);
+        }
+        // A new phone number falls through to a fresh lookup below
+        if (student && !phoneInMessage) {
+          const { answer, exhausted } = statusVerifyFailedMessage(history);
+          return jsonReply(conversation?.id ?? null, message, {
+            answer,
+            conversation_id: conversation?.id ?? null,
+            needs_human: false,
+            handoff_offered: exhausted,
+            low_confidence: false,
+            top_similarity: null,
+            intent: { ...EMPTY_INTENT, topic: "status_check" },
+            sources: [],
+            flow: exhausted ? "status_verify_locked" : "status_verify_retry",
+          });
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "lookup failed";
+        console.error("[/api/chat] student verify:", msg);
+        return jsonError(`Student lookup failed: ${msg}`, 500);
+      }
+    }
+
+    // --- Phone lookup (status check follow-up / retry after not-found) ---
+    // "check my status" right after sending a bare number reuses that number
+    const priorPhone =
+      !phoneInMessage && isStatusCheckIntent(message)
+        ? phoneFromHistory(history.slice(-2))
+        : null;
     const awaitingPhone =
       (conversation?.waiting_for_phone ?? false) ||
       lastAssistantAskedForPhone(history) ||
-      (lastAssistantStatusNotFound(history) && !!phoneInMessage);
+      (lastAssistantStatusNotFound(history) && !!phoneInMessage) ||
+      !!priorPhone;
 
     if (awaitingPhone) {
-      const phone = phoneInMessage;
+      const phone = phoneInMessage ?? priorPhone;
 
       // No phone — allow leaving status-check for enrollment / new questions
       if (!phone) {
@@ -552,30 +649,9 @@ export async function POST(req: Request) {
               );
             }
 
-            // Link this chat so the enrollment panel can resume the same row
-            if (conversation?.id) {
-              try {
-                await linkStudentConversation(student.phone, conversation.id);
-                const resume =
-                  nextIncompleteEnrollmentStep(student) ??
-                  student.enrollment_step ??
-                  1;
-                if (isEnrollmentIncomplete(student) && resume) {
-                  await getSupabase()
-                    .from("students")
-                    .update({ enrollment_step: resume })
-                    .eq("phone", student.phone);
-                }
-              } catch (err) {
-                console.warn(
-                  "[/api/chat] link student conversation:",
-                  err instanceof Error ? err.message : err,
-                );
-              }
-            }
-
+            // Don't reveal name/status until the student confirms one detail
             return jsonReply(conversation?.id ?? null, message, {
-              answer: formatStudentStatus(student),
+              answer: statusVerifyAskMessage(),
               conversation_id: conversation?.id ?? null,
               needs_human: false,
               handoff_offered: false,
@@ -583,14 +659,7 @@ export async function POST(req: Request) {
               top_similarity: null,
               intent: { ...EMPTY_INTENT, topic: "status_check" },
               sources: [],
-              flow: "status_found",
-              resume_enrollment: isEnrollmentIncomplete(student),
-              student: {
-                phone: student.phone,
-                enrollment_status: student.enrollment_status,
-                current_step: student.current_step,
-                enrollment_step: nextIncompleteEnrollmentStep(student),
-              },
+              flow: "status_verify",
             });
           }
 
@@ -628,8 +697,14 @@ export async function POST(req: Request) {
       }
     }
 
-    // --- Start status-check flow: ask for phone (no RAG) ---
+    // --- Start status-check flow: ask for phone ---
+    // Other questions in the same message are still answered (RAG), with the
+    // phone ask appended after the answer.
+    const subQuestions = splitQuestions(message);
+    const nonStatusParts = subQuestions.filter((q) => !isStatusCheckIntent(q));
+    let statusAskPending = false;
     if (isStatusCheckIntent(message)) {
+      statusAskPending = subQuestions.length > 1 && nonStatusParts.length > 0;
       try {
         if (!conversation) {
           conversation = await createConversation({ ipAddress: clientIp });
@@ -652,7 +727,7 @@ export async function POST(req: Request) {
         }
       }
 
-      return jsonReply(conversation?.id ?? null, message, {
+      if (!statusAskPending) return jsonReply(conversation?.id ?? null, message, {
         answer: statusAskForPhoneMessage(),
         conversation_id: conversation?.id ?? null,
         needs_human: false,
@@ -705,20 +780,8 @@ export async function POST(req: Request) {
       }
       // Fall through — student moved on with a real follow-up question.
     } else if (enrollInterest) {
-      // Prefer enrollment CTA over handoff / low-confidence RAG for "I want in"
-      const earlyIntent = detectIntentWithHistory(message, history);
-      const fac =
-        resolveFacultyFromMessage(message, earlyIntent.faculty) ||
-        extractFacultyFromHistory(history);
-      const label = fac
-        ? `Start application for ${fac}`
-        : "Start your application";
-      const answer =
-        (fac
-          ? `Great — let's get you started with **${fac}**.\n\nUse the link below to begin your application.`
-          : `Great — let's get your SNU application started.\n\nUse the link below to begin.`) +
-        `\n\n${ctaMarker("enroll", label)}`;
-
+      // "I want in" — the model answers (e.g. checks their faculty choices)
+      // and adds the enroll button; see enrollNote in buildMessages.
       try {
         if (conversation?.handoff_offered) {
           await clearHandoffOffered(conversation.id);
@@ -727,23 +790,6 @@ export async function POST(req: Request) {
       } catch {
         /* non-fatal */
       }
-
-      return jsonReply(conversation?.id ?? null, message, {
-        answer,
-        conversation_id: conversation?.id ?? null,
-        needs_human: false,
-        handoff_offered: false,
-        low_confidence: false,
-        top_similarity: null,
-        intent: {
-          ...EMPTY_INTENT,
-          topic: "enrollment_start",
-          faculty: fac,
-        },
-        sources: [],
-        flow: "enrollment_offer",
-        open_enrollment: false,
-      });
     } else if (awaitingHandoffConfirm && isAffirmativeHandoff(message)) {
       let persisted = false;
       try {
@@ -785,101 +831,150 @@ export async function POST(req: Request) {
 
     // --- RAG path ---
     const intent = detectIntentWithHistory(message, history);
-    const embedMessage =
-      intent.topic === "foundation_year"
-        ? `${message} Foundation Programme EAP mandatory foundation year`
-        : intent.faculty && !detectIntent(message).faculty
-          ? `${message} ${intent.faculty} fees tuition`
-          : message;
-    const embedding = await embedQuery(embedMessage);
 
-    let chunks: KbChunkMatch[] = [];
+    /** Embed + search the KB for one question; returns pruned chunks, best first. */
+    async function retrieveFor(
+      text: string,
+      intent: ChatIntent,
+    ): Promise<KbChunkMatch[]> {
+      const embedMessage =
+        intent.topic === "foundation_year"
+          ? `${text} Foundation Programme EAP mandatory foundation year`
+          : intent.faculty && !detectIntent(text).faculty
+            ? `${text} ${intent.faculty} fees tuition`
+            : text;
+      const embedding = await embedQuery(embedMessage);
 
-    if (intent.combineFeesAndFaculty && intent.faculty) {
-      const [feeChunks, facultyChunks] = await Promise.all([
-        searchKbChunks(embedding, { matchCount: TOP_K, topic: "fees" }),
-        searchKbChunks(embedding, {
-          matchCount: 3,
-          faculty: intent.faculty,
-        }),
-      ]);
-      chunks = mergeChunksBySimilarity([feeChunks, facultyChunks], TOP_K + 2);
-      if (chunks.length === 0) {
-        chunks = await searchKbChunks(embedding, { matchCount: TOP_K });
-      }
-    } else if (intent.combineExamAndPlacement) {
-      const [placementChunks, examChunks] = await Promise.all([
-        searchKbChunks(embedding, {
-          matchCount: TOP_K,
-          topic: "placement_results",
-        }),
-        searchKbChunks(embedding, {
-          matchCount: 2,
-          topic: "admission_exam",
-        }),
-      ]);
-      chunks = mergeChunksBySimilarity(
-        [placementChunks, examChunks],
-        TOP_K + 2,
-      );
-      if (chunks.length === 0) {
-        chunks = await searchKbChunks(embedding, { matchCount: TOP_K });
-      }
-    } else if (intent.topic === "foundation_year") {
-      // Foundation/EAP facts live in fees + tiers chunks — don't fall through to
-      // unrelated faculty program pages via broad semantic search.
-      const [feeChunks, tierChunks] = await Promise.all([
-        searchKbChunks(embedding, { matchCount: TOP_K, topic: "fees" }),
-        searchKbChunks(embedding, {
-          matchCount: 3,
-          topic: "faculty_tiers",
-        }),
-      ]);
-      chunks = mergeChunksBySimilarity([feeChunks, tierChunks], TOP_K);
-      if (chunks.length === 0) {
-        chunks = await searchKbChunks(embedding, { matchCount: TOP_K });
-      }
-    } else {
-      const attempts: { topic?: string | null; faculty?: string | null }[] = [];
-      if (intent.topic && intent.faculty) {
-        attempts.push({ topic: intent.topic, faculty: intent.faculty });
-      }
-      if (intent.faculty) attempts.push({ faculty: intent.faculty });
-      if (intent.topic) attempts.push({ topic: intent.topic });
-      attempts.push({});
+      let chunks: KbChunkMatch[] = [];
 
-      let best: KbChunkMatch[] = [];
-      let bestSim = -1;
-      for (const filters of attempts) {
-        const found = await searchKbChunks(embedding, {
-          matchCount: TOP_K,
-          topic: filters.topic ?? null,
-          faculty: filters.faculty ?? null,
-        });
-        if (found.length === 0) continue;
-        const top = found[0]?.similarity ?? 0;
-        if (top > bestSim) {
-          best = found;
-          bestSim = top;
+      if (intent.combineFeesAndFaculty && intent.faculty) {
+        const [feeChunks, facultyChunks] = await Promise.all([
+          searchKbChunks(embedding, { matchCount: TOP_K, topic: "fees" }),
+          searchKbChunks(embedding, {
+            matchCount: 3,
+            faculty: intent.faculty,
+          }),
+        ]);
+        chunks = mergeChunksBySimilarity([feeChunks, facultyChunks], TOP_K + 2);
+        if (chunks.length === 0) {
+          chunks = await searchKbChunks(embedding, { matchCount: TOP_K });
         }
-        // Strong filtered hit — no need to keep searching looser filters
-        if (top >= 0.55 && (filters.topic != null || filters.faculty != null)) {
-          break;
+      } else if (intent.combineExamAndPlacement) {
+        const [placementChunks, examChunks] = await Promise.all([
+          searchKbChunks(embedding, {
+            matchCount: TOP_K,
+            topic: "placement_results",
+          }),
+          searchKbChunks(embedding, {
+            matchCount: 2,
+            topic: "admission_exam",
+          }),
+        ]);
+        chunks = mergeChunksBySimilarity(
+          [placementChunks, examChunks],
+          TOP_K + 2,
+        );
+        if (chunks.length === 0) {
+          chunks = await searchKbChunks(embedding, { matchCount: TOP_K });
         }
+      } else if (intent.topic === "foundation_year") {
+        // Foundation/EAP facts live in fees + tiers chunks — don't fall through to
+        // unrelated faculty program pages via broad semantic search.
+        const [feeChunks, tierChunks] = await Promise.all([
+          searchKbChunks(embedding, { matchCount: TOP_K, topic: "fees" }),
+          searchKbChunks(embedding, {
+            matchCount: 3,
+            topic: "faculty_tiers",
+          }),
+        ]);
+        chunks = mergeChunksBySimilarity([feeChunks, tierChunks], TOP_K);
+        if (chunks.length === 0) {
+          chunks = await searchKbChunks(embedding, { matchCount: TOP_K });
+        }
+      } else {
+        const attempts: { topic?: string | null; faculty?: string | null }[] = [];
+        if (intent.topic && intent.faculty) {
+          attempts.push({ topic: intent.topic, faculty: intent.faculty });
+        }
+        if (intent.faculty) attempts.push({ faculty: intent.faculty });
+        if (intent.topic) attempts.push({ topic: intent.topic });
+        attempts.push({});
+
+        let best: KbChunkMatch[] = [];
+        let bestSim = -1;
+        for (const filters of attempts) {
+          const found = await searchKbChunks(embedding, {
+            matchCount: TOP_K,
+            topic: filters.topic ?? null,
+            faculty: filters.faculty ?? null,
+          });
+          if (found.length === 0) continue;
+          const top = found[0]?.similarity ?? 0;
+          if (top > bestSim) {
+            best = found;
+            bestSim = top;
+          }
+          // Strong filtered hit — no need to keep searching looser filters
+          if (top >= 0.55 && (filters.topic != null || filters.faculty != null)) {
+            break;
+          }
+        }
+        chunks = best;
       }
-      chunks = best;
+
+      // Drop weak hitchhikers from broad search. Citations stay stricter
+      // (confidence + answer reflection) so low-sim context won't be cited.
+      chunks = pruneWeakChunks(chunks, { maxGap: 0.1, minSimilarity: 0.38 });
+      return chunks;
     }
 
-    // Drop weak hitchhikers from broad search. Citations stay stricter
-    // (confidence + answer reflection) so low-sim context won't be cited.
-    chunks = pruneWeakChunks(chunks, { maxGap: 0.1, minSimilarity: 0.38 });
+    // A bare phone number (no status flow running) needs no KB lookup
+    const phoneOnly =
+      !statusAskPending && isBarePhoneMessage(message)
+        ? { valid: isValidSomaliMobile(message) }
+        : null;
+
+    // Stacked questions: retrieve for each part separately, then merge so
+    // every part has its own context. Status-check parts are handled above.
+    const retrievalParts = statusAskPending ? nonStatusParts : subQuestions;
+    let chunks: KbChunkMatch[] = [];
+    let partTops: (number | null)[] = [];
+    if (phoneOnly) {
+      // no retrieval
+    } else if (retrievalParts.length > 1) {
+      const perPart = await Promise.all(
+        retrievalParts.map((part) => {
+          const partIntent = detectIntentWithHistory(part, history);
+          // "how long is the program?" inherits the faculty named elsewhere
+          return retrieveFor(
+            part,
+            partIntent.faculty || !intent.faculty
+              ? partIntent
+              : { ...partIntent, faculty: intent.faculty },
+          );
+        }),
+      );
+      chunks = mergeChunksBySimilarity(
+        perPart.map((found) => found.slice(0, 4)),
+        10,
+      );
+      partTops = perPart.map((found) => found[0]?.similarity ?? null);
+    } else {
+      chunks = await retrieveFor(
+        statusAskPending ? retrievalParts[0] : message,
+        intent,
+      );
+      partTops = [chunks[0]?.similarity ?? null];
+    }
 
     const topSimilarity =
       chunks.length > 0 && typeof chunks[0].similarity === "number"
         ? chunks[0].similarity
         : null;
     const clarificationFollowUp = isClarificationFollowUp(message, history);
-    const retrievalLow = isLowConfidence(topSimilarity, chunks.length);
+    // Low when any part of the message found nothing solid
+    const retrievalLow =
+      !phoneOnly && partTops.some((top) => isLowConfidence(top, top == null ? 0 : 1));
     // Clarifications of a prior answer should be addressed, not refused/handed off.
     // Evaluated fresh every turn from THIS message's retrieval — never sticky.
     const lowConfidence = retrievalLow && !clarificationFollowUp;
@@ -904,12 +999,19 @@ export async function POST(req: Request) {
       );
     }
 
-    const messages = buildMessages(message, chunks, history, {
+    // Status part is answered by the phone ask appended after the reply, so
+    // the model only sees the other question(s)
+    const modelMessage = statusAskPending ? nonStatusParts.join(" ") : message;
+    const messages = buildMessages(modelMessage, chunks, history, {
       lowConfidence: retrievalLow,
       annualFee: intent.annualFee,
       contextFaculty: intent.faculty,
       clarificationFollowUp,
       feeFactsBlock,
+      enrollInterest,
+      subQuestions: retrievalParts,
+      phoneNumber: phoneOnly,
+      statusCheckFollows: statusAskPending,
     });
 
     const groqSignal = AbortSignal.timeout(18_000); // 18 s — below Vercel's 30 s limit
@@ -934,24 +1036,11 @@ export async function POST(req: Request) {
       return jsonError(`Groq error (${groqRes.status}): ${detail}`, 502);
     }
 
-    let handoffOfferedThisTurn = false;
-    if (lowConfidence && !enrollInterest) {
-      try {
-        if (!conversation) {
-          conversation = await createConversation({ ipAddress: clientIp });
-        }
-        await markHandoffOffered(conversation.id);
-        conversation = { ...conversation, handoff_offered: true };
-        handoffOfferedThisTurn = true;
-        conversationError = null;
-      } catch (err) {
-        handoffOfferedThisTurn = true;
-        conversationError =
-          err instanceof Error ? err.message : "failed to mark handoff_offered";
-        console.warn("[/api/chat] handoff_offered:", conversationError);
-      }
-    } else if (conversation?.handoff_offered) {
-      // High-confidence turn: clear any stale offer so it cannot stick
+    // The model adds the admin button itself when it applies; a pending offer
+    // is then detected from history (lastAssistantOfferedHandoff).
+    const handoffOfferedThisTurn = false;
+    if (conversation?.handoff_offered) {
+      // Clear any stale offer so it cannot stick
       try {
         await clearHandoffOffered(conversation.id);
         conversation = { ...conversation, handoff_offered: false };
@@ -965,38 +1054,29 @@ export async function POST(req: Request) {
 
     const conversationId = conversation?.id ?? null;
 
-    /** Ensure handoff CTA only appears on THIS turn's low-confidence answers. */
-    function finalizeAnswer(raw: string): string {
-      let answer = raw || "";
-      if (enrollInterest) {
-        // enrollment suffix handled by callers that already append CTA
-        return stripHandoffCta(answer);
+    /**
+     * Text appended after the model's answer. The model adds its own button
+     * markers when they apply (see prompt); the enroll button is a fallback for
+     * an explicit "I want to apply", and is never duplicated.
+     */
+    function suffixFor(text: string): string {
+      let suffix = "";
+      if (statusAskPending) suffix += `\n\n${statusAskForPhoneMessage()}`;
+      if (enrollInterest && !hasCta(text, "enroll")) {
+        // Name a faculty on the button only when the student named exactly one
+        const single = facultiesMentionedInText(message).length <= 1;
+        suffix += enrollmentCtaMessage(
+          single ? resolveFacultyFromMessage(message, intent.faculty) : null,
+        );
       }
-      if (lowConfidence) {
-        return appendHandoffOffer(answer);
-      }
-      return stripHandoffCta(answer);
+      return suffix;
     }
 
     if (wantStream && groqRes.body) {
-      let suffix = "";
-      if (enrollInterest) {
-        const fac = resolveFacultyFromMessage(message, intent.faculty);
-        suffix = enrollmentCtaMessage(fac);
-      } else if (lowConfidence) {
-        suffix = `\n\n${ctaMarker("handoff", "Connect with an admin")}`;
-      }
-
-      const withSuffix = suffix
-        ? appendTextToSseStream(groqRes.body, suffix)
-        : groqRes.body;
+      const withSuffix = appendTextToSseStream(groqRes.body, suffixFor);
 
       const { stream: streamOut, textPromise } = tapSseStream(withSuffix);
-      const cleanedPromise = textPromise.then((text) => {
-        if (enrollInterest) return text;
-        if (lowConfidence) return text;
-        return stripHandoffCta(text);
-      });
+      const cleanedPromise = textPromise.then((text) => text.trim());
       const sourcesPromise = cleanedPromise.then((text) =>
         sourcesUsedInAnswer(chunks, text),
       );
@@ -1030,13 +1110,8 @@ export async function POST(req: Request) {
     const completion = (await groqRes.json()) as {
       choices?: { message?: { content?: string } }[];
     };
-    let answer = completion.choices?.[0]?.message?.content ?? "";
-    if (enrollInterest) {
-      const fac = resolveFacultyFromMessage(message, intent.faculty);
-      answer = withEnrollmentOffer(stripHandoffCta(answer), fac);
-    } else {
-      answer = finalizeAnswer(answer);
-    }
+    const raw = (completion.choices?.[0]?.message?.content ?? "").trim();
+    const answer = `${raw}${suffixFor(raw)}`.trim();
 
     const sourceList = sourcesUsedInAnswer(chunks, answer);
 
