@@ -21,6 +21,7 @@ import { EnrollmentPanel } from "@/components/EnrollmentPanel";
 import { useToast } from "@/components/Toast";
 import {
   parseCtaContent,
+  ctaMarker,
   hasCta,
   hasEnrollmentResumeCtas,
   type CtaKind,
@@ -485,7 +486,7 @@ export default function HomePage() {
             m.role === "assistant" && /\[\[open_enrollment\]\]/i.test(m.content)
         );
         if (hasOpenMarker && !hadOpenMarker) {
-          voidMicrotask(() => {
+          queueMicrotask(() => {
             setEnrollOpen(true);
             setAdminHandoff(false);
           });

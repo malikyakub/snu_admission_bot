@@ -538,9 +538,9 @@ export async function POST(req: Request) {
 
         const missReply = () => {
           recordEnrollmentResumePhoneFailure(limitOpts);
-          return jsonReply(conversation.id, message, {
+          return jsonReply(limitOpts.conversationId, message, {
             answer: enrollmentResumePhoneMissMessage(),
-            conversation_id: conversation.id,
+            conversation_id: limitOpts.conversationId,
             needs_human: false,
             handoff_offered: false,
             low_confidence: false,

@@ -149,7 +149,15 @@ const ENROLLMENT_FIELD_STEPS: { step: number; fields: (keyof EnrollmentData)[] }
   // step 12 handled by isPaymentChoiceComplete (receipt optional)
 ];
 
-function fieldFilled(data: EnrollmentData, key: keyof EnrollmentData): boolean {
+/** Enrollment values as read from DB / admin rows (nulls allowed). */
+export type EnrollmentFields = {
+  [K in keyof EnrollmentData]?: EnrollmentData[K] | null;
+};
+
+function fieldFilled(
+  data: EnrollmentFields,
+  key: keyof EnrollmentData
+): boolean {
   const v = data[key];
   if (v == null) return false;
   if (typeof v === "string") return v.trim().length > 0;
@@ -159,22 +167,28 @@ function fieldFilled(data: EnrollmentData, key: keyof EnrollmentData): boolean {
 }
 
 /** True when the student finished the payment step in a submit-ready way. */
-export function isPaymentChoiceComplete(
-  data: Partial<EnrollmentData>
-): boolean {
+export function isPaymentChoiceComplete(data: EnrollmentFields): boolean {
   const method = String(data.payment_method || "")
     .trim()
     .toLowerCase();
   if (method === "office_delivery") return true;
-  if (method === "bank_receipt" && fieldFilled(data as EnrollmentData, "doc_payment_url")) {
+  if (method === "bank_receipt" && fieldFilled(data, "doc_payment_url")) {
     return true;
   }
   return false;
 }
 
+/** Fields read by payment-pending helpers (nullable to match DB / admin rows). */
+export type PaymentPendingFields = {
+  payment_method?: string | null;
+  doc_payment_url?: string | null;
+  bank_reference_number?: string | null;
+  enrollment_status?: string | null;
+};
+
 /** Payment still owed / awaiting receipt (for student + admin UI). */
-export function isPaymentPending(data: Partial<EnrollmentData>): boolean {
-  if (fieldFilled(data as EnrollmentData, "doc_payment_url")) return false;
+export function isPaymentPending(data: PaymentPendingFields): boolean {
+  if ((data.doc_payment_url || "").trim().length > 0) return false;
   const method = String(data.payment_method || "")
     .trim()
     .toLowerCase();
@@ -192,7 +206,7 @@ export function isPaymentPending(data: Partial<EnrollmentData>): boolean {
 }
 
 export function formatPaymentPendingLabel(
-  data: Partial<EnrollmentData>
+  data: PaymentPendingFields
 ): string | null {
   if (!isPaymentPending(data)) return null;
   const method = String(data.payment_method || "")
@@ -209,7 +223,7 @@ export function formatPaymentPendingLabel(
 
 /** First incomplete step (1-based), or null if application looks complete. */
 export function nextIncompleteEnrollmentStep(
-  data: EnrollmentData
+  data: EnrollmentFields
 ): number | null {
   for (const group of ENROLLMENT_FIELD_STEPS) {
     const missing = group.fields.some((f) => !fieldFilled(data, f));
@@ -219,7 +233,7 @@ export function nextIncompleteEnrollmentStep(
   return null;
 }
 
-export function isEnrollmentIncomplete(data: EnrollmentData): boolean {
+export function isEnrollmentIncomplete(data: EnrollmentFields): boolean {
   return nextIncompleteEnrollmentStep(data) != null;
 }
 

@@ -7,7 +7,14 @@ export type StudentStatus = {
   enrollment_status: string | null;
   current_step: string | null;
   enrollment_step?: number | null;
-} & Partial<EnrollmentData>;
+} & Omit<
+  Partial<EnrollmentData>,
+  | "full_name"
+  | "enrollment_status"
+  | "current_step"
+  | "phone"
+  | "enrollment_step"
+>;
 
 /** Digits-only Somalia-aware normalization for comparison. */
 export function normalizePhoneDigits(raw: string): string {

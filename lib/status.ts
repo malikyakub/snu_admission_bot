@@ -6,6 +6,7 @@ import {
   isEnrollmentIncomplete,
   nextIncompleteEnrollmentStep,
   type EnrollmentData,
+  type EnrollmentFields,
 } from "./enrollment";
 import { isEnrollInterest } from "./enrollment-intent";
 import { normalizePhoneDigits } from "./students";
@@ -364,12 +365,19 @@ export function formatEnrollmentStatusLabel(
 
 export function formatStudentStatus(
   student: {
-    full_name: string | null;
-    enrollment_status: string | null;
-    current_step: string | null;
+    full_name?: string | null;
+    enrollment_status?: string | null;
+    current_step?: string | null;
     phone: string;
     enrollment_step?: number | null;
-  } & Partial<EnrollmentData>
+  } & Omit<
+    Partial<EnrollmentData>,
+    | "full_name"
+    | "enrollment_status"
+    | "current_step"
+    | "phone"
+    | "enrollment_step"
+  >
 ): string {
   const name = student.full_name?.trim() || "there";
   const status = formatEnrollmentStatusLabel(student.enrollment_status);
@@ -559,7 +567,7 @@ function normalizeAnswer(v: string): string {
 /** True when the reply matches the student's mother's name or exam roll number. */
 export function verifiesStudent(
   reply: string,
-  student: Partial<EnrollmentData> & { mother_name?: string | null }
+  student: EnrollmentFields & { mother_name?: string | null }
 ): boolean {
   const said = normalizeAnswer(reply);
   if (!said) return false;
