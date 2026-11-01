@@ -38,7 +38,7 @@ export const FACULTY_ORIGINAL_YEARS: Record<string, number> = {
   "Agriculture and Environmental Science": 4,
   "Economic and Management Science": 4,
   Education: 4,
-  Engineering: 4,
+  Engineering: 5,
   "Health Sciences and Tropical Medicine": 4,
   Languages: 4,
   Law: 4,

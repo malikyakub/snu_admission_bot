@@ -19,7 +19,12 @@ import {
 } from "lucide-react";
 import { EnrollmentPanel } from "@/components/EnrollmentPanel";
 import { useToast } from "@/components/Toast";
-import { parseCtaContent, ctaMarker, hasCta, type CtaKind } from "@/lib/cta";
+import {
+  parseCtaContent,
+  hasCta,
+  hasEnrollmentResumeCtas,
+  type CtaKind,
+} from "@/lib/cta";
 import {
   enrollmentCtaMessage,
   enrollmentWelcomeMessage,
@@ -85,12 +90,19 @@ function setActiveConversationId(id: string) {
   localStorage.setItem(LS_ACTIVE, JSON.stringify(id));
 }
 
+function clearActiveConversationId() {
+  localStorage.removeItem(LS_ACTIVE);
+}
+
 function readActiveConversationId(): string | null {
   return safeJson<string>(localStorage.getItem(LS_ACTIVE));
 }
 
 function sortedIndexList(): ConversationIndexEntry[] {
-  return Object.values(readIndex()).sort((a, b) => b.updatedAt - a.updatedAt);
+  // Hide empty drafts — sessions only appear after the first message
+  return Object.values(readIndex())
+    .filter((e) => e.messageCount > 0)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 function titleFromMessages(messages: ChatMessage[]): string {
@@ -108,6 +120,9 @@ function syncIndexMeta(
   opts?: { bumpUpdatedAt?: boolean; title?: string | null }
 ) {
   const prev = readIndex()[conversationId];
+  // Never create a sidebar/DB-index row before the first message
+  if (messages.length === 0 && !prev) return;
+
   const bump = opts?.bumpUpdatedAt !== false;
   const dbTitle = opts?.title?.trim() || null;
   const prevTitle = prev?.title?.trim() || null;
@@ -425,9 +440,17 @@ export default function HomePage() {
   const pendingRef = useRef(false);
   const adminHandoffRef = useRef(false);
   const indexFingerprintRef = useRef<string>("");
+  /** Tracks the active conversation for ignoring stale sync responses. */
+  const conversationIdRef = useRef<string | null>(null);
+  /**
+   * Client-generated id reserved for the first send of a draft chat.
+   * Blocks double creation from rapid re-entry / overlapping handlers.
+   */
+  const ensuringSessionIdRef = useRef<string | null>(null);
 
   pendingRef.current = pending;
   adminHandoffRef.current = adminHandoff;
+  conversationIdRef.current = conversationId;
 
   function notifyConnectedToAdmin() {
     setAdminHandoff(true);
@@ -445,6 +468,9 @@ export default function HomePage() {
   const syncFromRemote = useCallback(
     async (id: string, opts?: { replace?: boolean }) => {
       const { messages: remoteRows, meta } = await fetchConversationBundle(id);
+      // Ignore stale responses after New chat / switch
+      if (conversationIdRef.current !== id) return 0;
+
       const remote = remoteToChatMessages(remoteRows);
       let merged: ChatMessage[] = remote;
 
@@ -459,7 +485,7 @@ export default function HomePage() {
             m.role === "assistant" && /\[\[open_enrollment\]\]/i.test(m.content)
         );
         if (hasOpenMarker && !hadOpenMarker) {
-          queueMicrotask(() => {
+          voidMicrotask(() => {
             setEnrollOpen(true);
             setAdminHandoff(false);
           });
@@ -470,6 +496,9 @@ export default function HomePage() {
           : mergeRemoteIntoLocal(prev, remote, pendingRef.current);
         return merged;
       });
+
+      // Re-check after state scheduling — user may have switched mid-flight
+      if (conversationIdRef.current !== id) return 0;
 
       const handedOff = meta?.needs_human === true;
       if (handedOff && !adminHandoffRef.current) {
@@ -531,30 +560,30 @@ export default function HomePage() {
       if (reuseId) {
         if (cancelled) return;
         setActiveConversationId(reuseId);
+        ensuringSessionIdRef.current = null;
         setConversationId(reuseId);
         setMessagesLoading(true);
         const cached = readIndex()[reuseId];
         setAdminHandoff(Boolean(cached?.adminHandoff));
         try {
           await syncFromRemote(reuseId, { replace: true });
+          if (!cancelled) {
+            // After refresh / new session: acknowledge interrupted enrollment
+            const { messages: rows } = await fetchConversationBundle(reuseId);
+            const existing = remoteToChatMessages(rows);
+            await offerResumeIfNeeded(reuseId, existing);
+          }
         } finally {
           if (!cancelled) setMessagesLoading(false);
         }
         return;
       }
 
-      const newId = crypto.randomUUID();
+      // Draft chat: no session id / index / DB row until the first message
       if (cancelled) return;
-      setActiveConversationId(newId);
-      upsertIndex({
-        conversation_id: newId,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        title: "New conversation",
-        messageCount: 0,
-        adminHandoff: false,
-      });
-      setConversationId(newId);
+      clearActiveConversationId();
+      ensuringSessionIdRef.current = null;
+      setConversationId(null);
       setMessages([]);
       setMessagesLoading(false);
       setAdminHandoff(false);
@@ -591,7 +620,7 @@ export default function HomePage() {
   /* Typing anywhere focuses the composer and keeps the first keystroke */
   useEffect(() => {
     function onGlobalKeyDown(e: KeyboardEvent) {
-      if (pending || messagesLoading || !conversationId || enrollOpen) return;
+      if (pending || messagesLoading || enrollOpen) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.isComposing) return;
 
@@ -636,7 +665,7 @@ export default function HomePage() {
 
     window.addEventListener("keydown", onGlobalKeyDown);
     return () => window.removeEventListener("keydown", onGlobalKeyDown);
-  }, [pending, messagesLoading, conversationId, enrollOpen]);
+  }, [pending, messagesLoading, enrollOpen]);
 
   /* Poll for new messages (admin replies). Prefer API over anon Realtime — RLS blocks anon reads. */
   useEffect(() => {
@@ -663,6 +692,7 @@ export default function HomePage() {
     connectedToAdmin?: boolean;
     sources?: ChatSource[];
     silent?: boolean;
+    openEnrollment?: boolean;
   }> {
     const ct = res.headers.get("content-type") || "";
     const sourcesHdr =
@@ -707,6 +737,7 @@ export default function HomePage() {
         connectedToAdmin: json?.needs_human === true,
         sources: jsonSources,
         silent: json?.silent === true || json?.flow === "human_handoff",
+        openEnrollment: json?.open_enrollment === true,
       };
     }
 
@@ -772,17 +803,150 @@ export default function HomePage() {
   /* Send                                                               */
   /* ---------------------------------------------------------------- */
 
-  function startEnrollmentFromCta() {
-    setMessages((prev) => [
-      ...prev,
-      { role: "assistant", content: enrollmentWelcomeMessage() },
-    ]);
+  function appendAssistantLocal(content: string) {
+    setMessages((prev) => {
+      if (
+        prev.some(
+          (m) => m.role === "assistant" && m.content === content
+        )
+      ) {
+        return prev;
+      }
+      return [...prev, { role: "assistant", content }];
+    });
+  }
+
+  function startEnrollmentFromCta(opts?: { resume?: boolean }) {
+    if (!opts?.resume) {
+      appendAssistantLocal(enrollmentWelcomeMessage());
+    }
     setEnrollOpen(true);
   }
 
+  async function pauseEnrollmentToChat() {
+    if (!conversationId) return;
+    try {
+      const res = await fetch("/api/enrollment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "pause",
+          conversation_id: conversationId,
+        }),
+      });
+      const json = (await res.json().catch(() => null)) as {
+        confirmation_message?: string;
+        message?: { id?: string; content?: string } | null;
+      } | null;
+      const text = json?.confirmation_message || json?.message?.content;
+      if (text) {
+        setMessages((prev) => {
+          if (prev.some((m) => m.content === text)) return prev;
+          return [
+            ...prev,
+            {
+              id: json?.message?.id,
+              role: "assistant" as const,
+              content: text,
+            },
+          ];
+        });
+      }
+    } catch {
+      /* non-fatal */
+    }
+  }
+
+  const resumePromptedRef = useRef<string | null>(null);
+
+  async function offerResumeIfNeeded(id: string, existingMessages: ChatMessage[]) {
+    if (resumePromptedRef.current === id) return;
+    const alreadyOffered = [...existingMessages]
+      .reverse()
+      .find((m) => m.role === "assistant");
+    if (alreadyOffered && hasEnrollmentResumeCtas(alreadyOffered.content)) {
+      resumePromptedRef.current = id;
+      return;
+    }
+    try {
+      const res = await fetch("/api/enrollment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "resume_prompt",
+          conversation_id: id,
+        }),
+      });
+      const json = (await res.json().catch(() => null)) as {
+        ok?: boolean;
+        skipped?: boolean;
+        confirmation_message?: string;
+        message?: { id?: string; content?: string } | null;
+      } | null;
+      if (!json?.ok || json.skipped) return;
+      const text = json.confirmation_message || json.message?.content;
+      if (!text) return;
+      resumePromptedRef.current = id;
+      setMessages((prev) => {
+        if (prev.some((m) => m.content === text)) return prev;
+        return [
+          ...prev,
+          {
+            id: json.message?.id,
+            role: "assistant" as const,
+            content: text,
+          },
+        ];
+      });
+    } catch {
+      /* non-fatal */
+    }
+  }
+
   async function handleCta(kind: CtaKind) {
-    if (kind === "enroll") {
-      startEnrollmentFromCta();
+    if (kind === "enroll" || kind === "continue_enroll") {
+      startEnrollmentFromCta({ resume: kind === "continue_enroll" });
+      return;
+    }
+    if (kind === "start_over") {
+      if (!conversationId) return;
+      const ok = window.confirm(
+        "Start over? This clears your saved application answers for this chat."
+      );
+      if (!ok) return;
+      try {
+        const res = await fetch("/api/enrollment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "start_over",
+            conversation_id: conversationId,
+          }),
+        });
+        const json = (await res.json().catch(() => null)) as {
+          confirmation_message?: string;
+          message?: { id?: string; content?: string } | null;
+        } | null;
+        const text = json?.confirmation_message || json?.message?.content;
+        if (text) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: json?.message?.id,
+              role: "assistant" as const,
+              content: text,
+            },
+          ]);
+        }
+        resumePromptedRef.current = null;
+        setEnrollOpen(false);
+      } catch {
+        toast({
+          title: "Could not start over",
+          description: "Please try again.",
+          variant: "error",
+        });
+      }
       return;
     }
     if (kind === "handoff") {
@@ -843,9 +1007,23 @@ export default function HomePage() {
   }
 
   async function handleSend(text?: string) {
-    if (!conversationId) return;
     const msg = (text ?? inputValue).trim();
-    if (!msg || pending) return;
+    if (!msg || pending || messagesLoading) return;
+
+    // Create the session only on first send (client UUID; API get-or-creates).
+    // Ref blocks overlapping first-sends from minting two ids.
+    let id = conversationId ?? ensuringSessionIdRef.current;
+    if (!id) {
+      id = crypto.randomUUID();
+      ensuringSessionIdRef.current = id;
+      conversationIdRef.current = id;
+      setConversationId(id);
+      setActiveConversationId(id);
+    } else if (!conversationId) {
+      conversationIdRef.current = id;
+      setConversationId(id);
+      setActiveConversationId(id);
+    }
 
     setPending(true);
     setInputValue("");
@@ -865,12 +1043,10 @@ export default function HomePage() {
           { role: "assistant", content: "" },
         ];
     setMessages(optimistic);
-    if (conversationId) {
-      syncIndexMeta(conversationId, optimistic, adminHandoff, {
-        bumpUpdatedAt: true,
-      });
-      refreshConvList();
-    }
+    syncIndexMeta(id, optimistic, adminHandoff, {
+      bumpUpdatedAt: true,
+    });
+    refreshConvList();
 
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
@@ -883,7 +1059,7 @@ export default function HomePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: msg,
-          conversation_id: conversationId,
+          conversation_id: id,
           history,
           // Human-handoff threads don't need streaming
           stream: !humanOnly,
@@ -891,7 +1067,7 @@ export default function HomePage() {
         signal: controller.signal,
       });
 
-      let { answer, connectedToAdmin, sources, silent } =
+      let { answer, connectedToAdmin, sources, silent, openEnrollment } =
         await streamResponse(res);
 
       if (
@@ -912,6 +1088,10 @@ export default function HomePage() {
           return next;
         });
         return;
+      }
+
+      if (openEnrollment) {
+        setEnrollOpen(true);
       }
 
       // After 3 consecutive faculty questions, offer enrollment CTA (clickable)
@@ -1017,7 +1197,7 @@ export default function HomePage() {
       if (timeoutId) clearTimeout(timeoutId);
       setPending(false);
       pendingRef.current = false;
-      if (conversationId) void syncFromRemote(conversationId);
+      if (id && conversationIdRef.current === id) void syncFromRemote(id);
       inputRef.current?.focus();
     }
   }
@@ -1027,23 +1207,19 @@ export default function HomePage() {
   /* ---------------------------------------------------------------- */
 
   function startNewChat() {
-    const newId = crypto.randomUUID();
-    setActiveConversationId(newId);
-    upsertIndex({
-      conversation_id: newId,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      title: "New conversation",
-      messageCount: 0,
-      adminHandoff: false,
-    });
+    // Reset to a draft — do not allocate a session or write index/DB yet
+    clearActiveConversationId();
+    ensuringSessionIdRef.current = null;
     indexFingerprintRef.current = "";
-    setConversationId(newId);
+    conversationIdRef.current = null;
+    setQueryConvId(null);
+    setConversationId(null);
     setMessages([]);
     setMessagesLoading(false);
     setAdminHandoff(false);
     setInputValue("");
     setSidebarOpen(false);
+    setEnrollOpen(false);
     enrollCtaOffered.current = false;
     refreshConvList();
     router.push("/");
@@ -1054,6 +1230,8 @@ export default function HomePage() {
       setSidebarOpen(false);
       return;
     }
+    ensuringSessionIdRef.current = null;
+    conversationIdRef.current = id;
     setActiveConversationId(id);
     setConversationId(id);
     setMessagesLoading(true);
@@ -1065,7 +1243,7 @@ export default function HomePage() {
       try {
         await syncFromRemote(id, { replace: true });
       } finally {
-        setMessagesLoading(false);
+        if (conversationIdRef.current === id) setMessagesLoading(false);
       }
     })();
   }
@@ -1302,7 +1480,11 @@ export default function HomePage() {
             {/* Enrollment panel drop-up */}
             <EnrollmentPanel
               open={enrollOpen}
-              onClose={() => setEnrollOpen(false)}
+              onClose={() => {
+                const wasOpen = enrollOpen;
+                setEnrollOpen(false);
+                if (wasOpen) void pauseEnrollmentToChat();
+              }}
               conversationId={conversationId}
               onComplete={({ confirmation, message }) => {
                 const content = message?.content || confirmation;
@@ -1337,7 +1519,7 @@ export default function HomePage() {
                 className="flex-1 max-h-40 resize-none overflow-y-auto bg-transparent px-1 py-1.5 text-sm text-slate-800 placeholder-slate-400 outline-none font-roboto leading-5"
                 placeholder="What's in your mind..."
                 value={inputValue}
-                disabled={pending || messagesLoading || !conversationId}
+                disabled={pending || messagesLoading}
                 onChange={(e) => {
                   setInputValue(e.target.value);
                   const el = e.target;
@@ -1353,7 +1535,7 @@ export default function HomePage() {
               />
               <button
                 type="submit"
-                disabled={pending || messagesLoading || !conversationId || !inputValue.trim()}
+                disabled={pending || messagesLoading || !inputValue.trim()}
                 className="shrink-0 mb-0.5 w-8 h-8 rounded-full bg-sky-500 flex items-center justify-center text-white disabled:opacity-50 hover:bg-sky-600 transition-colors"
                 aria-label="Send"
               >

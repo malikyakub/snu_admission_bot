@@ -14,12 +14,90 @@ export const HANDOFF_OFFER =
 const HANDOFF_CONFIRM =
   "I've connected you with an admin. Someone from the team will follow up with you shortly.";
 
+/** Immediate connect reply when the student explicitly asks for a human. */
+export const HANDOFF_CONNECTING_NOW = "Sure, connecting you now.";
+
+const OFF_TOPIC_STEER =
+  "I'm here for SNU admissions — faculties, requirements, fees, the entrance exam, or checking an application. What would you like to know?";
+
 export function isLowConfidence(
   topSimilarity: number | null | undefined,
   chunkCount: number
 ): boolean {
   if (chunkCount === 0 || topSimilarity == null) return true;
   return topSimilarity < HANDOFF_SIMILARITY_THRESHOLD;
+}
+
+/**
+ * Student explicitly asks for a human / real person / admin
+ * (immediate connect — not a soft offer).
+ */
+export function isExplicitHumanRequest(message: string): boolean {
+  const t = message
+    .normalize("NFKC")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (!t) return false;
+
+  return (
+    /\b(talk|speak|connect|chat)\b.{0,40}\b(real\s+)?(person|human|admin|operator|agent)\b/i.test(
+      t,
+    ) ||
+    /\b(real\s+person|human\s+admin|live\s+(agent|person|human)|customer\s+service)\b/i.test(
+      t,
+    ) ||
+    /\b(get\s+me\s+(an?\s+)?(admin|human|person)|transfer\s+me|hand\s*me\s*off)\b/i.test(
+      t,
+    )
+  );
+}
+
+/** Admissions / SNU-related question (vs fully off-topic). */
+export function isAdmissionsOnTopic(
+  message: string,
+  intent: { topic?: string | null; faculty?: string | null },
+): boolean {
+  if (intent.topic || intent.faculty) return true;
+  const t = message.normalize("NFKC").replace(/\s+/g, " ").trim();
+  return /\b(snu|somali national|admission|facult|enrol|enroll|exam|tuition|fee|campus|appl(y|ication)|student|programme|program|foundation|eap|tier|scholarship|imtixaan)\b/i.test(
+    t,
+  );
+}
+
+/**
+ * Clearly unrelated to SNU admissions (English consumer / general chit-chat).
+ * Used to short-circuit before RAG; ambiguous or non-English messages are not
+ * treated as off-topic here so they can still hit retrieval.
+ *
+ * Clear off-topic patterns win even if a weak keyword (e.g. bare "phone")
+ * also matched an admissions intent topic.
+ */
+export function isClearlyOffTopic(
+  message: string,
+  intent: { topic?: string | null; faculty?: string | null },
+): boolean {
+  const t = message.normalize("NFKC").replace(/\s+/g, " ").trim();
+  if (!t) return false;
+
+  const clearlyUnrelated =
+    /\b(bitcoin|cryptocurrency|world cup|best phone|iphone|samsung|android(?:\s+phone)?|netflix|weather|joke|recipe)\b/i.test(
+      t,
+    ) ||
+    /\b(buy|purchase)\b.{0,30}\b(phone|laptop|car|stock)\b/i.test(t) ||
+    /\bphone\b.{0,24}\b(buy|purchase)\b/i.test(t) ||
+    /\bwho won\b/i.test(t) ||
+    /\b(best|cheapest)\b.{0,20}\b(phone|laptop|car)\b.{0,20}\b(buy|right now|today)\b/i.test(
+      t,
+    );
+
+  if (clearlyUnrelated) return true;
+  if (isAdmissionsOnTopic(message, intent)) return false;
+  return false;
+}
+
+export function offTopicSteerMessage(): string {
+  return OFF_TOPIC_STEER;
 }
 
 /** Basic yes / connect-me matching for the turn after a handoff offer. */
@@ -94,6 +172,11 @@ export function appendHandoffOffer(answer: string): string {
 
 export function handoffConfirmMessage(): string {
   return HANDOFF_CONFIRM;
+}
+
+/** Short confirm used for explicit "talk to a real person" requests. */
+export function handoffConnectingNowMessage(): string {
+  return HANDOFF_CONNECTING_NOW;
 }
 
 /** When an admin hands the thread back and the student did not leave a pending question. */

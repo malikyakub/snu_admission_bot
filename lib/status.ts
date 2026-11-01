@@ -2,6 +2,7 @@
 
 import { ctaMarker } from "./cta";
 import {
+  formatPaymentPendingLabel,
   isEnrollmentIncomplete,
   nextIncompleteEnrollmentStep,
   type EnrollmentData,
@@ -379,24 +380,48 @@ export function formatStudentStatus(
       ? student.enrollment_step
       : null);
 
+  const paymentNote = formatPaymentPendingLabel(student);
+
   if (incomplete && resumeStep) {
+    const paymentLine = paymentNote
+      ? `\n\nPayment: **${paymentNote}**.`
+      : "";
     return (
-      `Hi ${name}, I found your application (status: **${status}**).\n\n` +
+      `Hi ${name}, I found your application (status: **${status}**).${paymentLine}\n\n` +
       `Some details are still missing — you can continue from step ${resumeStep}.\n\n` +
       ctaMarker("enroll", "Continue your application")
     );
   }
 
   const statusLine = `Hi ${name}, your enrollment status is currently **${status}**.`;
+  const paymentLine = paymentNote ? ` Payment: **${paymentNote}**.` : "";
   const step = student.current_step?.trim();
   if (step) {
-    return `${statusLine} You're on this step: ${step}.`;
+    return `${statusLine}${paymentLine} You're on this step: ${step}.`;
   }
-  return statusLine;
+  return `${statusLine}${paymentLine}`;
 }
 
 export function statusNotFoundMessage(): string {
   return START_ENROLLMENT_OFFER;
+}
+
+/**
+ * After a "no application found" reply, the student disputes the result
+ * (e.g. "I applied last week, you are wrong") — offer a human handoff.
+ */
+export function isStatusNotFoundDispute(message: string): boolean {
+  const t = message.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!t) return false;
+  if (extractPhoneNumber(t)) return false;
+  if (isStartEnrollmentAffirmative(t)) return false;
+
+  return (
+    /\b(you co?uldn'?t find|you (are|re) wrong|that'?s wrong|you'?re mistaken|wrong number|i did apply|i applied|i already applied|i submitted|check again|look again|try again|not (true|correct)|incorrect)\b/i.test(
+      t,
+    ) ||
+    /\b(no[,.]?\s+i\s+applied|but i applied|i promise i applied)\b/i.test(t)
+  );
 }
 
 /** Detect yes to "start enrollment" after a not-found status lookup. */

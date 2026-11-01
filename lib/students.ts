@@ -75,7 +75,7 @@ export function phoneVariants(raw: string): string[] {
 }
 
 const STUDENT_SELECT =
-  "phone, full_name, mothers_name, mother_name, gender, date_of_birth, place_of_birth, national_id, nationality, region, address, school_name, school_country, school_region_city, certificate_type, exam_roll_number, certificate_number, study_campus, exam_location, faculty_choice_1, faculty_choice_2, faculty_choice_3, guardian_name, guardian_mobile, guardian_relation, doc_photo_url, doc_id_url, doc_certificate_url, doc_payment_url, enrollment_status, current_step, enrollment_step, conversation_id, needs_human";
+  "phone, full_name, mothers_name, mother_name, gender, date_of_birth, place_of_birth, national_id, nationality, region, address, school_name, school_country, school_region_city, certificate_type, exam_roll_number, certificate_number, study_campus, exam_location, faculty_choice_1, faculty_choice_2, faculty_choice_3, guardian_name, guardian_mobile, guardian_relation, doc_photo_url, doc_id_url, doc_certificate_url, doc_payment_url, payment_method, bank_reference_number, enrollment_status, current_step, enrollment_step, conversation_id, needs_human";
 
 export async function findStudentByPhone(
   rawPhone: string

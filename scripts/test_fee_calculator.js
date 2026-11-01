@@ -28,6 +28,7 @@ const cases = [
   { name: "Medicine", rate: 125, years: 6, expect: 2210 },
   { name: "Economic", rate: 80, years: 4, expect: 1250 },
   { name: "Veterinary", rate: 80, years: 5, expect: 1420 },
+  { name: "Engineering", rate: 125, years: 5, expect: 1960 },
 ];
 
 for (const c of cases) {

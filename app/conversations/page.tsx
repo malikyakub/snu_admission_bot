@@ -31,7 +31,9 @@ export default function ConversationsPage() {
     const idx = safeJson<Record<string, ConversationIndexEntry>>(
       localStorage.getItem(LS_INDEX)
     );
-    const list = idx ? Object.values(idx) : [];
+    const list = idx
+      ? Object.values(idx).filter((e) => e.messageCount > 0)
+      : [];
     list.sort((a, b) => b.updatedAt - a.updatedAt);
     setEntries(list);
     setLoaded(true);
@@ -52,7 +54,10 @@ export default function ConversationsPage() {
         <div className="px-4 pb-3 shrink-0">
           <button
             type="button"
-            onClick={() => router.push("/")}
+            onClick={() => {
+              localStorage.removeItem(LS_ACTIVE);
+              router.push("/");
+            }}
             className="flex w-full items-center justify-center gap-2 rounded-full bg-sky-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-sky-600 transition-colors"
           >
             <Plus className="w-4 h-4" />
@@ -107,7 +112,10 @@ export default function ConversationsPage() {
                 <p className="font-medium mb-1">No past conversations yet.</p>
                 <button
                   type="button"
-                  onClick={() => router.push("/")}
+                  onClick={() => {
+                    localStorage.removeItem(LS_ACTIVE);
+                    router.push("/");
+                  }}
                   className="mt-2 text-sky-500 hover:underline text-sm"
                 >
                   Start your first conversation →

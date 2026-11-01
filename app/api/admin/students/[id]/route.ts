@@ -124,7 +124,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to update student";
     console.error("[/api/admin/students/[id] PATCH]", msg);
-    const status = /must be one of|No valid fields/i.test(msg) ? 400 : 500;
+    const status =
+      /must be one of|No valid fields|faculty choice|first choice/i.test(msg)
+        ? 400
+        : 500;
     return NextResponse.json({ ok: false, error: msg }, { status });
   }
 }

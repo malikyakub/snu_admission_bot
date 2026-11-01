@@ -1,3 +1,4 @@
+import { validateFacultyChoices } from "./enrollment";
 import { getSupabase } from "./supabase";
 
 export type AdminStudentListItem = {
@@ -9,6 +10,8 @@ export type AdminStudentListItem = {
   faculty_choice_1: string | null;
   study_campus: string | null;
   exam_location: string | null;
+  doc_payment_url: string | null;
+  payment_method: string | null;
   conversation_id: string | null;
   needs_human: boolean | null;
   created_at: string | null;
@@ -39,6 +42,8 @@ export type AdminStudentDetail = AdminStudentListItem & {
   doc_id_url: string | null;
   doc_certificate_url: string | null;
   doc_payment_url: string | null;
+  payment_method: string | null;
+  bank_reference_number: string | null;
 };
 
 export type AdminStudentPatch = {
@@ -102,10 +107,10 @@ export const ADMIN_ENROLLMENT_STATUSES = [
 export type AdminEnrollmentStatus = (typeof ADMIN_ENROLLMENT_STATUSES)[number];
 
 const LIST_SELECT =
-  "id, phone, full_name, enrollment_status, enrollment_step, faculty_choice_1, study_campus, exam_location, conversation_id, needs_human, created_at, updated_at";
+  "id, phone, full_name, enrollment_status, enrollment_step, faculty_choice_1, study_campus, exam_location, doc_payment_url, payment_method, conversation_id, needs_human, created_at, updated_at";
 
 const DETAIL_SELECT =
-  "id, phone, full_name, mothers_name, gender, date_of_birth, place_of_birth, national_id, nationality, region, address, school_name, school_country, school_region_city, certificate_type, exam_roll_number, certificate_number, study_campus, exam_location, faculty_choice_1, faculty_choice_2, faculty_choice_3, guardian_name, guardian_mobile, guardian_relation, doc_photo_url, doc_id_url, doc_certificate_url, doc_payment_url, enrollment_status, enrollment_step, conversation_id, needs_human, created_at, updated_at";
+  "id, phone, full_name, mothers_name, gender, date_of_birth, place_of_birth, national_id, nationality, region, address, school_name, school_country, school_region_city, certificate_type, exam_roll_number, certificate_number, study_campus, exam_location, faculty_choice_1, faculty_choice_2, faculty_choice_3, guardian_name, guardian_mobile, guardian_relation, doc_photo_url, doc_id_url, doc_certificate_url, doc_payment_url, payment_method, bank_reference_number, enrollment_status, enrollment_step, conversation_id, needs_human, created_at, updated_at";
 
 /** Map UI filter keys to DB status values. */
 export function statusFilterValues(
@@ -181,6 +186,9 @@ export async function patchAdminStudent(
   id: string,
   patch: AdminStudentPatch
 ): Promise<AdminStudentDetail> {
+  const existing = await getAdminStudent(id);
+  if (!existing) throw new Error("Student not found");
+
   const allowed: AdminStudentPatch = {};
   for (const key of PATCHABLE_TEXT_KEYS) {
     if (key in patch) {
@@ -203,6 +211,41 @@ export async function patchAdminStudent(
 
   if (Object.keys(allowed).length === 0) {
     throw new Error("No valid fields to update");
+  }
+
+  const facultyKeys = [
+    "faculty_choice_1",
+    "faculty_choice_2",
+    "faculty_choice_3",
+  ] as const;
+  const facultyTouched = facultyKeys.some((k) => k in allowed);
+  if (facultyTouched) {
+    const nextChoices = {
+      faculty_choice_1:
+        "faculty_choice_1" in allowed
+          ? allowed.faculty_choice_1
+          : existing.faculty_choice_1,
+      faculty_choice_2:
+        "faculty_choice_2" in allowed
+          ? allowed.faculty_choice_2
+          : existing.faculty_choice_2,
+      faculty_choice_3:
+        "faculty_choice_3" in allowed
+          ? allowed.faculty_choice_3
+          : existing.faculty_choice_3,
+    };
+    const unchanged =
+      (nextChoices.faculty_choice_1 || "") ===
+        (existing.faculty_choice_1 || "") &&
+      (nextChoices.faculty_choice_2 || "") ===
+        (existing.faculty_choice_2 || "") &&
+      (nextChoices.faculty_choice_3 || "") ===
+        (existing.faculty_choice_3 || "");
+    // Preserve legacy saved trios; only reject when faculties actually change
+    if (!unchanged) {
+      const facultyError = validateFacultyChoices(nextChoices);
+      if (facultyError) throw new Error(facultyError);
+    }
   }
 
   const supabase = getSupabase();

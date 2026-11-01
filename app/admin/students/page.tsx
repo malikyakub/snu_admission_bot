@@ -45,9 +45,33 @@ import {
   type AdminStudentListItem,
   type AdminStudentPatch,
 } from "@/lib/admin-students";
-import { EXAM_LOCATIONS, STUDY_CAMPUSES, TOTAL_ENROLLMENT_STEPS } from "@/lib/enrollment";
+import {
+  ALL_FACULTIES,
+  allowedFaculties,
+  EXAM_LOCATIONS,
+  FACULTY_CHOICE_TIER1_NOTE,
+  formatPaymentPendingLabel,
+  TOTAL_ENROLLMENT_STEPS,
+  type Faculty,
+} from "@/lib/enrollment";
 import { formatEnrollmentStatusLabel } from "@/lib/status";
 import { cn } from "@/lib/utils";
+
+function facultyOptionsForSlot(
+  slot: 1 | 2 | 3,
+  earlier: string[],
+  currentValue: string
+): string[] {
+  const base =
+    slot === 1
+      ? [...ALL_FACULTIES]
+      : allowedFaculties(earlier.filter(Boolean), slot);
+  // Keep a legacy saved value visible without rewriting the DB row
+  if (currentValue && !base.includes(currentValue as Faculty)) {
+    return [currentValue, ...base];
+  }
+  return base;
+}
 
 type StatusFilter =
   | "all"
@@ -87,7 +111,6 @@ type DraftFields = {
   guardian_name: string;
   guardian_mobile: string;
   guardian_relation: string;
-  study_campus: string;
   exam_location: string;
   enrollment_status: string;
 };
@@ -113,7 +136,6 @@ const EMPTY_DRAFT: DraftFields = {
   guardian_name: "",
   guardian_mobile: "",
   guardian_relation: "",
-  study_campus: "",
   exam_location: "",
   enrollment_status: "pending_review",
 };
@@ -190,7 +212,6 @@ function draftFromStudent(s: AdminStudentDetail): DraftFields {
     guardian_name: s.guardian_name || "",
     guardian_mobile: s.guardian_mobile || "",
     guardian_relation: s.guardian_relation || "",
-    study_campus: s.study_campus || "",
     exam_location: s.exam_location || "",
     enrollment_status: normalizeAdminStatus(s.enrollment_status),
   };
@@ -549,9 +570,10 @@ export default function AdminStudentsPage() {
             ? {
                 ...s,
                 full_name: json.student!.full_name,
-                study_campus: json.student!.study_campus,
                 exam_location: json.student!.exam_location,
                 enrollment_status: json.student!.enrollment_status,
+                payment_method: json.student!.payment_method,
+                doc_payment_url: json.student!.doc_payment_url,
                 faculty_choice_1: json.student!.faculty_choice_1,
                 updated_at: json.student!.updated_at,
               }
@@ -576,8 +598,7 @@ export default function AdminStudentsPage() {
           Students
         </h1>
         <p className="mt-1 text-sm text-slate-600">
-          Review enrollment applications, set campus &amp; exam location, and
-          update status.
+          Review enrollment applications, set exam location, and update status.
         </p>
       </div>
 
@@ -659,14 +680,21 @@ export default function AdminStudentsPage() {
                       {s.phone || "—"}
                     </TableCell>
                     <TableCell>
-                      <span
-                        className={cn(
-                          "inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset",
-                          statusBadgeClass(s.enrollment_status)
-                        )}
-                      >
-                        {formatEnrollmentStatusLabel(s.enrollment_status)}
-                      </span>
+                      <div className="flex flex-col items-start gap-1">
+                        <span
+                          className={cn(
+                            "inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset",
+                            statusBadgeClass(s.enrollment_status)
+                          )}
+                        >
+                          {formatEnrollmentStatusLabel(s.enrollment_status)}
+                        </span>
+                        {formatPaymentPendingLabel(s) ? (
+                          <span className="inline-flex rounded-full bg-orange-50 px-2 py-0.5 text-[10px] font-medium text-orange-800 ring-1 ring-inset ring-orange-200">
+                            Pending payment
+                          </span>
+                        ) : null}
+                      </div>
                     </TableCell>
                     <TableCell className="max-w-[12rem] truncate text-slate-600">
                       {s.faculty_choice_1 || "—"}
@@ -756,22 +784,39 @@ export default function AdminStudentsPage() {
                   </p>
                   <div className="grid gap-3">
                     <GhostSelectField
-                      label="Study campus"
-                      value={draft.study_campus}
-                      onValueChange={(v) => setField("study_campus", v)}
-                      options={STUDY_CAMPUSES}
-                      placeholder="Set campus"
-                      highlight={highlightPlacement}
-                      fieldRef={campusRef}
-                    />
-                    <GhostSelectField
                       label="Exam location"
                       value={draft.exam_location}
                       onValueChange={(v) => setField("exam_location", v)}
                       options={EXAM_LOCATIONS}
                       placeholder="Set exam location"
                       highlight={highlightPlacement}
+                      fieldRef={campusRef}
                     />
+                  </div>
+                </section>
+
+                <section className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Payment
+                  </p>
+                  <div className="grid gap-2">
+                    <p className="text-sm text-slate-700">
+                      {formatPaymentPendingLabel(detail) ||
+                        (detail.doc_payment_url
+                          ? "Payment receipt on file"
+                          : "No payment choice yet")}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Method:{" "}
+                      {detail.payment_method === "office_delivery"
+                        ? "Office delivery"
+                        : detail.payment_method === "bank_receipt"
+                          ? "Bank receipt"
+                          : "—"}
+                      {detail.bank_reference_number
+                        ? ` · Ref: ${detail.bank_reference_number}`
+                        : ""}
+                    </p>
                   </div>
                 </section>
 
@@ -866,21 +911,90 @@ export default function AdminStudentsPage() {
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                     Faculty choices
                   </p>
+                  <p className="text-[11px] text-slate-500">
+                    {FACULTY_CHOICE_TIER1_NOTE}
+                  </p>
                   <div className="grid gap-3">
-                    <GhostField
+                    <GhostSelectField
                       label="1st choice"
                       value={draft.faculty_choice_1}
-                      onChange={(v) => setField("faculty_choice_1", v)}
+                      onValueChange={(v) => {
+                        setDraft((prev) => {
+                          const next1 = v;
+                          let next2 = prev.faculty_choice_2;
+                          let next3 = prev.faculty_choice_3;
+                          if (
+                            next2 &&
+                            !allowedFaculties([next1].filter(Boolean), 2).includes(
+                              next2 as Faculty
+                            )
+                          ) {
+                            next2 = "";
+                          }
+                          if (
+                            next3 &&
+                            !allowedFaculties(
+                              [next1, next2].filter(Boolean),
+                              3
+                            ).includes(next3 as Faculty)
+                          ) {
+                            next3 = "";
+                          }
+                          return {
+                            ...prev,
+                            faculty_choice_1: next1,
+                            faculty_choice_2: next2,
+                            faculty_choice_3: next3,
+                          };
+                        });
+                      }}
+                      options={facultyOptionsForSlot(
+                        1,
+                        [],
+                        draft.faculty_choice_1
+                      )}
+                      placeholder="Select first choice"
                     />
-                    <GhostField
+                    <GhostSelectField
                       label="2nd choice"
                       value={draft.faculty_choice_2}
-                      onChange={(v) => setField("faculty_choice_2", v)}
+                      onValueChange={(v) => {
+                        setDraft((prev) => {
+                          const next2 = v;
+                          let next3 = prev.faculty_choice_3;
+                          if (
+                            next3 &&
+                            !allowedFaculties(
+                              [prev.faculty_choice_1, next2].filter(Boolean),
+                              3
+                            ).includes(next3 as Faculty)
+                          ) {
+                            next3 = "";
+                          }
+                          return {
+                            ...prev,
+                            faculty_choice_2: next2,
+                            faculty_choice_3: next3,
+                          };
+                        });
+                      }}
+                      options={facultyOptionsForSlot(
+                        2,
+                        [draft.faculty_choice_1],
+                        draft.faculty_choice_2
+                      )}
+                      placeholder="Select second choice"
                     />
-                    <GhostField
+                    <GhostSelectField
                       label="3rd choice"
                       value={draft.faculty_choice_3}
-                      onChange={(v) => setField("faculty_choice_3", v)}
+                      onValueChange={(v) => setField("faculty_choice_3", v)}
+                      options={facultyOptionsForSlot(
+                        3,
+                        [draft.faculty_choice_1, draft.faculty_choice_2],
+                        draft.faculty_choice_3
+                      )}
+                      placeholder="Select third choice"
                     />
                   </div>
                 </section>

@@ -2,18 +2,26 @@ import {
   createConversation,
   getOrCreateConversation,
   clearHandoffOffered,
+  markHandoffOffered,
   markNeedsHuman,
   setWaitingForPhone,
 } from "@/lib/conversations";
 import { clientIpFromHeaders } from "@/lib/request-ip";
 import { embedQuery } from "@/lib/embeddings";
 import {
+  appendHandoffOffer,
   handoffConfirmMessage,
+  handoffConnectingNowMessage,
+  isAdmissionsOnTopic,
   isAffirmativeHandoff,
+  isClearlyOffTopic,
+  isExplicitHumanRequest,
   isHandoffDecline,
   isClarificationFollowUp,
   isLowConfidence,
   lastAssistantOfferedHandoff,
+  offTopicSteerMessage,
+  stripHandoffCta,
 } from "@/lib/handoff";
 import {
   detectIntent,
@@ -30,6 +38,7 @@ import {
   isGreeting,
   isStartEnrollmentAffirmative,
   isStatusCheckIntent,
+  isStatusNotFoundDispute,
   lastAssistantAskedForPhone,
   lastAssistantAskedForVerification,
   lastAssistantOfferedStartEnrollment,
@@ -46,9 +55,27 @@ import {
 } from "@/lib/status";
 import {
   enrollmentCtaMessage,
+  enrollmentPausedMessage,
+  enrollmentResumeAskPhoneMessage,
+  enrollmentResumePhoneMissMessage,
+  enrollmentResumePhoneRateLimitedMessage,
+  enrollmentStartOverConfirmMessage,
+  enrollmentStartOverDoneMessage,
+  isCancelEnrollmentIntent,
+  isConfirmStartOver,
+  isContinueEnrollmentIntent,
   isEnrollInterestWithHistory,
+  isStartOverEnrollmentIntent,
+  lastAssistantAskedForEnrollmentResumePhone,
+  lastAssistantAskedStartOverConfirm,
+  lastAssistantOfferedEnrollmentResume,
   resolveFacultyFromMessage,
 } from "@/lib/enrollment-intent";
+import { generateEnrollmentResumeAcknowledgement } from "@/lib/enrollment-resume";
+import {
+  isEnrollmentResumePhoneRateLimited,
+  recordEnrollmentResumePhoneFailure,
+} from "@/lib/enrollment-resume-limit";
 import { ctaMarker, hasCta } from "@/lib/cta";
 import {
   findStudentByPhone,
@@ -59,7 +86,11 @@ import {
 } from "@/lib/students";
 import {
   isEnrollmentIncomplete,
+  isEnrollmentSubmitted,
+  loadEnrollmentByConversation,
   nextIncompleteEnrollmentStep,
+  resetEnrollmentForConversation,
+  type EnrollmentData,
 } from "@/lib/enrollment";
 import { searchKbChunks, getSupabase, type KbChunkMatch } from "@/lib/supabase";
 import {
@@ -394,6 +425,262 @@ export async function POST(req: Request) {
       console.warn("[/api/chat] conversation load:", conversationError);
     }
 
+    // --- Interrupted enrollment: resume / pause / start over ---
+    const enrollmentRecord = conversation?.id
+      ? await loadEnrollmentByConversation(conversation.id).catch(() => null)
+      : null;
+    const hasIncompleteEnrollment = Boolean(
+      enrollmentRecord && isEnrollmentIncomplete(enrollmentRecord)
+    );
+    const enrollmentAlreadySubmitted = Boolean(
+      enrollmentRecord &&
+        !isEnrollmentIncomplete(enrollmentRecord) &&
+        isEnrollmentSubmitted(enrollmentRecord)
+    );
+
+    // Start-over confirmation (after CTA or "start over")
+    if (
+      conversation?.id &&
+      hasIncompleteEnrollment &&
+      ((lastAssistantAskedStartOverConfirm(history) &&
+        isConfirmStartOver(message)) ||
+        (isStartOverEnrollmentIntent(message) &&
+          lastAssistantOfferedEnrollmentResume(history) &&
+          isConfirmStartOver(message)))
+    ) {
+      await resetEnrollmentForConversation(conversation.id);
+      return jsonReply(conversation.id, message, {
+        answer: enrollmentStartOverDoneMessage(),
+        conversation_id: conversation.id,
+        needs_human: false,
+        handoff_offered: false,
+        low_confidence: false,
+        top_similarity: null,
+        intent: { ...EMPTY_INTENT, topic: "enrollment_start_over" },
+        sources: [],
+        flow: "enrollment_start_over",
+        open_enrollment: false,
+      });
+    }
+
+    if (
+      conversation?.id &&
+      hasIncompleteEnrollment &&
+      isStartOverEnrollmentIntent(message)
+    ) {
+      return jsonReply(conversation.id, message, {
+        answer: enrollmentStartOverConfirmMessage(),
+        conversation_id: conversation.id,
+        needs_human: false,
+        handoff_offered: false,
+        low_confidence: false,
+        top_similarity: null,
+        intent: { ...EMPTY_INTENT, topic: "enrollment_start_over" },
+        sources: [],
+        flow: "enrollment_start_over_confirm",
+      });
+    }
+
+    // Continue saved enrollment on THIS conversation → open the panel
+    if (
+      conversation?.id &&
+      hasIncompleteEnrollment &&
+      (isContinueEnrollmentIntent(message) ||
+        (enrollInterest && lastAssistantOfferedEnrollmentResume(history)))
+    ) {
+      return jsonReply(conversation.id, message, {
+        answer:
+          "Welcome back — opening your application where you left off.",
+        conversation_id: conversation.id,
+        needs_human: false,
+        handoff_offered: false,
+        low_confidence: false,
+        top_similarity: null,
+        intent: { ...EMPTY_INTENT, topic: "enrollment_resume" },
+        sources: [],
+        flow: "enrollment_continue",
+        open_enrollment: true,
+        resume_enrollment: true,
+      });
+    }
+
+    // New browser / no linked draft: resume by phone number (no PII until match)
+    const wantsPhoneResume =
+      !hasIncompleteEnrollment &&
+      (isContinueEnrollmentIntent(message) ||
+        lastAssistantAskedForEnrollmentResumePhone(history));
+
+    if (conversation?.id && wantsPhoneResume) {
+      const resumePhone = extractPhoneNumber(message);
+
+      if (
+        lastAssistantAskedForEnrollmentResumePhone(history) &&
+        resumePhone
+      ) {
+        const limitOpts = {
+          conversationId: conversation.id,
+          ip: clientIp,
+        };
+
+        if (isEnrollmentResumePhoneRateLimited(limitOpts)) {
+          return jsonReply(conversation.id, message, {
+            answer: enrollmentResumePhoneRateLimitedMessage(),
+            conversation_id: conversation.id,
+            needs_human: false,
+            handoff_offered: false,
+            low_confidence: false,
+            top_similarity: null,
+            intent: { ...EMPTY_INTENT, topic: "enrollment_resume" },
+            sources: [],
+            flow: "enrollment_resume_phone_rate_limited",
+          });
+        }
+
+        const missReply = () => {
+          recordEnrollmentResumePhoneFailure(limitOpts);
+          return jsonReply(conversation.id, message, {
+            answer: enrollmentResumePhoneMissMessage(),
+            conversation_id: conversation.id,
+            needs_human: false,
+            handoff_offered: false,
+            low_confidence: false,
+            top_similarity: null,
+            intent: { ...EMPTY_INTENT, topic: "enrollment_resume" },
+            sources: [],
+            flow: "enrollment_resume_phone_miss",
+          });
+        };
+
+        try {
+          const student = await findStudentByPhone(resumePhone);
+          // Same neutral miss for unknown / not resumable (no number enumeration)
+          if (!student) return missReply();
+
+          await linkStudentConversation(student.phone, conversation.id);
+          const linked = (await loadEnrollmentByConversation(
+            conversation.id
+          ).catch(() => null)) as EnrollmentData | null;
+          const record = linked || (student as EnrollmentData);
+
+          if (!isEnrollmentIncomplete(record)) {
+            return missReply();
+          }
+
+          // Phone match: only first name + next step (minimal disclosure)
+          const ack = await generateEnrollmentResumeAcknowledgement(
+            record,
+            "minimal"
+          );
+          return jsonReply(conversation.id, message, {
+            answer: ack,
+            conversation_id: conversation.id,
+            needs_human: false,
+            handoff_offered: false,
+            low_confidence: false,
+            top_similarity: null,
+            intent: { ...EMPTY_INTENT, topic: "enrollment_resume" },
+            sources: [],
+            flow: "enrollment_resume_by_phone",
+            resume_enrollment: true,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "lookup failed";
+          console.error("[/api/chat] enrollment resume by phone:", msg);
+          // Treat lookup errors like a miss — don't leak existence
+          return missReply();
+        }
+      }
+
+      if (isContinueEnrollmentIntent(message)) {
+        return jsonReply(conversation.id, message, {
+          answer: enrollmentResumeAskPhoneMessage(),
+          conversation_id: conversation.id,
+          needs_human: false,
+          handoff_offered: false,
+          low_confidence: false,
+          top_similarity: null,
+          intent: { ...EMPTY_INTENT, topic: "enrollment_resume" },
+          sources: [],
+          flow: "enrollment_resume_ask_phone",
+        });
+      }
+    }
+
+    // Cancel / stop mid-enrollment (chat command)
+    if (
+      conversation?.id &&
+      hasIncompleteEnrollment &&
+      isCancelEnrollmentIntent(message)
+    ) {
+      return jsonReply(conversation.id, message, {
+        answer: enrollmentPausedMessage(enrollmentRecord!),
+        conversation_id: conversation.id,
+        needs_human: false,
+        handoff_offered: false,
+        low_confidence: false,
+        top_similarity: null,
+        intent: { ...EMPTY_INTENT, topic: "enrollment_pause" },
+        sources: [],
+        flow: "enrollment_pause",
+      });
+    }
+
+    // Returning student with in-progress application — model-written ack + CTAs
+    if (
+      conversation?.id &&
+      hasIncompleteEnrollment &&
+      !lastAssistantOfferedEnrollmentResume(history) &&
+      (isGreeting(message) ||
+        enrollInterest ||
+        isContinueEnrollmentIntent(message) ||
+        isStartEnrollmentAffirmative(message))
+    ) {
+      const ack = await generateEnrollmentResumeAcknowledgement(
+        enrollmentRecord!
+      );
+      return jsonReply(conversation.id, message, {
+        answer: ack,
+        conversation_id: conversation.id,
+        needs_human: false,
+        handoff_offered: false,
+        low_confidence: false,
+        top_similarity: null,
+        intent: { ...EMPTY_INTENT, topic: "enrollment_resume" },
+        sources: [],
+        flow: "enrollment_resume_offer",
+        resume_enrollment: true,
+      });
+    }
+
+    // Already submitted — don't restart; show status instead
+    if (
+      conversation?.id &&
+      enrollmentAlreadySubmitted &&
+      (enrollInterest ||
+        isContinueEnrollmentIntent(message) ||
+        isStartEnrollmentAffirmative(message) ||
+        isStartOverEnrollmentIntent(message))
+    ) {
+      return jsonReply(conversation.id, message, {
+        answer: formatStudentStatus({
+          full_name: enrollmentRecord!.full_name ?? null,
+          enrollment_status: enrollmentRecord!.enrollment_status ?? null,
+          current_step: enrollmentRecord!.current_step ?? null,
+          phone: enrollmentRecord!.phone || "",
+          enrollment_step: enrollmentRecord!.enrollment_step,
+          ...enrollmentRecord!,
+        }),
+        conversation_id: conversation.id,
+        needs_human: false,
+        handoff_offered: false,
+        low_confidence: false,
+        top_similarity: null,
+        intent: { ...EMPTY_INTENT, topic: "status_check" },
+        sources: [],
+        flow: "enrollment_already_submitted",
+      });
+    }
+
     // --- Strict handoff: bot stays silent while an admin owns the thread ---
     if (conversation?.needs_human) {
       if (!skipUserSave) {
@@ -451,6 +738,47 @@ export async function POST(req: Request) {
 
     // Enrollment is offered via CTA after a normal answer — never auto-open here.
 
+    // --- Explicit human / admin request: connect immediately, then stay silent ---
+    if (isExplicitHumanRequest(message)) {
+      let persisted = false;
+      try {
+        if (!conversation) {
+          conversation = await createConversation({ ipAddress: clientIp });
+        }
+        await markNeedsHuman(conversation.id);
+        conversation = {
+          ...conversation,
+          needs_human: true,
+          handoff_offered: false,
+        };
+        persisted = true;
+        conversationError = null;
+      } catch (err) {
+        conversationError =
+          err instanceof Error ? err.message : "failed to set needs_human";
+        console.warn("[/api/chat] needs_human (explicit):", conversationError);
+      }
+
+      return jsonReply(conversation?.id ?? null, message, {
+        answer: handoffConnectingNowMessage(),
+        conversation_id: conversation?.id ?? null,
+        needs_human: persisted,
+        handoff_offered: false,
+        low_confidence: false,
+        top_similarity: null,
+        intent: EMPTY_INTENT,
+        sources: [],
+        flow: "human_handoff",
+        ...(conversationError
+          ? {
+              warning:
+                "Could not persist needs_human. Run supabase/schema.sql in Supabase, then retry.",
+              conversation_error: conversationError,
+            }
+          : {}),
+      });
+    }
+
     // --- Enrollment start after status-not-found offer (yes / CTA follow-up text) ---
     if (
       lastAssistantOfferedStartEnrollment(history) &&
@@ -468,6 +796,41 @@ export async function POST(req: Request) {
         flow: "enrollment_offer",
         // Client opens only when user clicks the CTA — not automatically
         open_enrollment: false,
+      });
+    }
+
+    // --- Dispute after status not-found → offer human handoff ---
+    if (
+      lastAssistantStatusNotFound(history) &&
+      isStatusNotFoundDispute(message)
+    ) {
+      let offered = false;
+      try {
+        if (!conversation) {
+          conversation = await createConversation({ ipAddress: clientIp });
+        }
+        await markHandoffOffered(conversation.id);
+        conversation = { ...conversation, handoff_offered: true };
+        offered = true;
+        conversationError = null;
+      } catch (err) {
+        conversationError =
+          err instanceof Error ? err.message : "failed to set handoff_offered";
+        console.warn("[/api/chat] handoff_offered (dispute):", conversationError);
+      }
+
+      return jsonReply(conversation?.id ?? null, message, {
+        answer: appendHandoffOffer(
+          "Sorry about that — I may have the wrong number on file, or the application isn't in the system yet. An admin can look into it for you.",
+        ),
+        conversation_id: conversation?.id ?? null,
+        needs_human: false,
+        handoff_offered: offered,
+        low_confidence: false,
+        top_similarity: null,
+        intent: { ...EMPTY_INTENT, topic: "status_check" },
+        sources: [],
+        flow: "status_dispute_handoff",
       });
     }
 
@@ -563,16 +926,20 @@ export async function POST(req: Request) {
     }
 
     // --- Phone lookup (status check follow-up / retry after not-found) ---
-    // "check my status" right after sending a bare number reuses that number
+    // "check my status" right after sending a bare number reuses that number.
+    // Also runs immediately when the first status message already includes a phone.
     const priorPhone =
       !phoneInMessage && isStatusCheckIntent(message)
         ? phoneFromHistory(history.slice(-2))
         : null;
+    const statusWithPhone =
+      isStatusCheckIntent(message) && !!phoneInMessage;
     const awaitingPhone =
       (conversation?.waiting_for_phone ?? false) ||
       lastAssistantAskedForPhone(history) ||
       (lastAssistantStatusNotFound(history) && !!phoneInMessage) ||
-      !!priorPhone;
+      !!priorPhone ||
+      statusWithPhone;
 
     if (awaitingPhone) {
       const phone = phoneInMessage ?? priorPhone;
@@ -832,6 +1199,25 @@ export async function POST(req: Request) {
     // --- RAG path ---
     const intent = detectIntentWithHistory(message, history);
 
+    // Clearly off-topic: one friendly steer-back, never a handoff button
+    if (
+      !enrollInterest &&
+      !isStatusCheckIntent(message) &&
+      isClearlyOffTopic(message, intent)
+    ) {
+      return jsonReply(conversation?.id ?? null, message, {
+        answer: offTopicSteerMessage(),
+        conversation_id: conversation?.id ?? null,
+        needs_human: false,
+        handoff_offered: false,
+        low_confidence: false,
+        top_similarity: null,
+        intent: { ...EMPTY_INTENT, topic: "off_topic" },
+        sources: [],
+        flow: "off_topic",
+      });
+    }
+
     /** Embed + search the KB for one question; returns pruned chunks, best first. */
     async function retrieveFor(
       text: string,
@@ -1036,47 +1422,124 @@ export async function POST(req: Request) {
       return jsonError(`Groq error (${groqRes.status}): ${detail}`, 502);
     }
 
-    // The model adds the admin button itself when it applies; a pending offer
-    // is then detected from history (lastAssistantOfferedHandoff).
-    const handoffOfferedThisTurn = false;
-    if (conversation?.handoff_offered) {
-      // Clear any stale offer so it cannot stick
-      try {
-        await clearHandoffOffered(conversation.id);
-        conversation = { ...conversation, handoff_offered: false };
-      } catch (err) {
-        console.warn(
-          "[/api/chat] clear handoff_offered:",
-          err instanceof Error ? err.message : err,
-        );
-      }
+    // Handoff CTA is rule-based only: never leave a model-emitted handoff marker.
+    // Candidate when low-similarity on an on-topic admissions question; skipped
+    // later if the model still produced a real answer (not a don't-know).
+    const handoffCandidate =
+      lowConfidence &&
+      !enrollInterest &&
+      !phoneOnly &&
+      !isClearlyOffTopic(message, intent) &&
+      isAdmissionsOnTopic(message, intent);
+
+    function answerWasFulfilled(text: string): boolean {
+      const clean = stripHandoffCta(text).replace(/\s+/g, " ").trim();
+      if (clean.length < 120) return false;
+      return !/\b(don'?t have|do not have|no (information|info)|can'?t (help|answer|find)|isn'?t (covered|something i)|not something i have)\b/i.test(
+        clean,
+      );
     }
+
+    function shouldAppendHandoff(text: string): boolean {
+      if (!handoffCandidate) return false;
+      // Never show the button when the question was answered
+      if (answerWasFulfilled(text)) return false;
+      return true;
+    }
+
+    let handoffOfferedThisTurn = false;
 
     const conversationId = conversation?.id ?? null;
 
+    async function persistHandoffOffer(offered: boolean) {
+      handoffOfferedThisTurn = offered;
+      if (offered) {
+        try {
+          let conv = conversation;
+          if (!conv) {
+            conv = await createConversation({ ipAddress: clientIp });
+            conversation = conv;
+          }
+          await markHandoffOffered(conv.id);
+          conversation = { ...conv, handoff_offered: true };
+          conversationError = null;
+        } catch (err) {
+          console.warn(
+            "[/api/chat] markHandoffOffered:",
+            err instanceof Error ? err.message : err,
+          );
+        }
+      } else if (conversation?.handoff_offered) {
+        try {
+          await clearHandoffOffered(conversation.id);
+          conversation = { ...conversation, handoff_offered: false };
+        } catch (err) {
+          console.warn(
+            "[/api/chat] clear handoff_offered:",
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+    }
+
     /**
-     * Text appended after the model's answer. The model adds its own button
-     * markers when they apply (see prompt); the enroll button is a fallback for
-     * an explicit "I want to apply", and is never duplicated.
+     * Finalize model text: strip any handoff marker the model added, optionally
+     * append a rule-based handoff offer, then enroll/status suffixes.
      */
-    function suffixFor(text: string): string {
-      let suffix = "";
-      if (statusAskPending) suffix += `\n\n${statusAskForPhoneMessage()}`;
+    function finalizeAnswer(raw: string): string {
+      let text = stripHandoffCta(raw);
+      if (shouldAppendHandoff(text)) {
+        text = appendHandoffOffer(text);
+      }
+      if (statusAskPending) text += `\n\n${statusAskForPhoneMessage()}`;
       if (enrollInterest && !hasCta(text, "enroll")) {
-        // Name a faculty on the button only when the student named exactly one
         const single = facultiesMentionedInText(message).length <= 1;
-        suffix += enrollmentCtaMessage(
+        text += enrollmentCtaMessage(
           single ? resolveFacultyFromMessage(message, intent.faculty) : null,
         );
       }
-      return suffix;
+      return text.trim();
+    }
+
+    /**
+     * Bytes to inject at end of SSE. Prefer appending only; stripping a
+     * mid-stream model handoff marker isn't possible after bytes were sent.
+     */
+    function suffixFor(streamedText: string): string {
+      const trimmed = (streamedText || "").trimEnd();
+      let extra = "";
+      if (shouldAppendHandoff(trimmed) && !hasCta(trimmed, "handoff")) {
+        const withOffer = appendHandoffOffer(trimmed);
+        if (withOffer.startsWith(trimmed)) {
+          extra += withOffer.slice(trimmed.length);
+        } else {
+          extra += `\n\n${ctaMarker("handoff", "Connect with an admin")}`;
+        }
+      }
+      if (statusAskPending) extra += `\n\n${statusAskForPhoneMessage()}`;
+      if (
+        enrollInterest &&
+        !hasCta(trimmed, "enroll") &&
+        !hasCta(extra, "enroll")
+      ) {
+        const single = facultiesMentionedInText(message).length <= 1;
+        extra += enrollmentCtaMessage(
+          single ? resolveFacultyFromMessage(message, intent.faculty) : null,
+        );
+      }
+      return extra;
     }
 
     if (wantStream && groqRes.body) {
       const withSuffix = appendTextToSseStream(groqRes.body, suffixFor);
 
       const { stream: streamOut, textPromise } = tapSseStream(withSuffix);
-      const cleanedPromise = textPromise.then((text) => text.trim());
+      // Persist the rule-based final text (strips any model handoff marker)
+      const cleanedPromise = textPromise.then(async (text) => {
+        const final = finalizeAnswer(text);
+        await persistHandoffOffer(hasCta(final, "handoff"));
+        return final;
+      });
       const sourcesPromise = cleanedPromise.then((text) =>
         sourcesUsedInAnswer(chunks, text),
       );
@@ -1097,7 +1560,8 @@ export async function POST(req: Request) {
           "X-SNUBot-Intent-Faculty": intent.faculty ?? "",
           "X-SNUBot-Chunks": String(chunks.length),
           "X-SNUBot-Low-Confidence": lowConfidence ? "1" : "0",
-          "X-SNUBot-Handoff-Offered": handoffOfferedThisTurn ? "1" : "0",
+          // Offer is finalized after the stream; CTA in the body is the source of truth
+          "X-SNUBot-Handoff-Offered": handoffCandidate ? "1" : "0",
           // Prefer trailing snubot_sources SSE event (answer-grounded). Header may be empty.
           "X-SNUBot-Sources": encodeSourcesHeader([]),
           ...(conversationId
@@ -1111,17 +1575,19 @@ export async function POST(req: Request) {
       choices?: { message?: { content?: string } }[];
     };
     const raw = (completion.choices?.[0]?.message?.content ?? "").trim();
-    const answer = `${raw}${suffixFor(raw)}`.trim();
+    const answer = finalizeAnswer(raw);
+    await persistHandoffOffer(hasCta(answer, "handoff"));
+    const replyConversationId = conversation?.id ?? conversationId;
 
     const sourceList = sourcesUsedInAnswer(chunks, answer);
 
     if (skipUserSave) {
-      const saved = await saveTurnNow(conversationId, message, answer, {
+      const saved = await saveTurnNow(replyConversationId, message, answer, {
         skipUserSave: true,
       });
       return Response.json({
         answer,
-        conversation_id: conversationId,
+        conversation_id: replyConversationId,
         needs_human: conversation?.needs_human ?? false,
         handoff_offered: handoffOfferedThisTurn,
         low_confidence: lowConfidence,
@@ -1147,11 +1613,11 @@ export async function POST(req: Request) {
       });
     }
 
-    saveTurnAsync(conversationId, message, answer);
+    saveTurnAsync(replyConversationId, message, answer);
 
     return Response.json({
       answer,
-      conversation_id: conversationId,
+      conversation_id: replyConversationId,
       needs_human: conversation?.needs_human ?? false,
       handoff_offered: handoffOfferedThisTurn,
       low_confidence: lowConfidence,

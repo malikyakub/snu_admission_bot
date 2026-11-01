@@ -17,13 +17,20 @@ import { PhoneInput } from "@/components/PhoneInput";
 import {
   ALL_FACULTIES,
   allowedFaculties,
+  FACULTY_CHOICE_TIER1_NOTE,
   isEnrollmentIncomplete,
   isEnrollmentSubmitted,
+  isPaymentChoiceComplete,
+  nextIncompleteEnrollmentStep,
   TOTAL_ENROLLMENT_STEPS,
   type EnrollmentData,
   type Faculty,
+  type PaymentMethod,
 } from "@/lib/enrollment";
-import { enrollmentReceivedConfirmationMessage } from "@/lib/enrollment-intent";
+import {
+  enrollmentPaymentState,
+  enrollmentReceivedConfirmationMessage,
+} from "@/lib/enrollment-intent";
 
 const TOTAL_STEPS = TOTAL_ENROLLMENT_STEPS;
 
@@ -33,7 +40,8 @@ const TOTAL_STEPS = TOTAL_ENROLLMENT_STEPS;
 
 type StepSubmitFn = (
   fields: Partial<EnrollmentData>,
-  _label?: string
+  _label?: string,
+  opts?: { deferComplete?: boolean }
 ) => Promise<void>;
 
 interface StepProps {
@@ -64,6 +72,8 @@ function StepShell({
   onBack,
   loading,
   valid,
+  submitLabel,
+  footerExtra,
 }: {
   step: number;
   title: string;
@@ -72,6 +82,8 @@ function StepShell({
   onBack?: () => void;
   loading: boolean;
   valid: boolean;
+  submitLabel?: string;
+  footerExtra?: React.ReactNode;
 }) {
   return (
     <form
@@ -106,7 +118,8 @@ function StepShell({
         </div>
       </div>
       <div className="flex flex-col gap-3">{children}</div>
-      <div className="flex justify-end pt-1">
+      <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+        {footerExtra}
         <Button
           type="submit"
           className="bg-sky-600 hover:bg-sky-700 text-white px-5"
@@ -117,7 +130,8 @@ function StepShell({
           ) : (
             <ChevronRight className="w-4 h-4 mr-1.5" />
           )}
-          {step === TOTAL_STEPS ? "Submit Application" : "Next"}
+          {submitLabel ??
+            (step === TOTAL_STEPS ? "Submit Application" : "Next")}
         </Button>
       </div>
     </form>
@@ -311,7 +325,7 @@ function Step6({ data, onSubmit, onBack }: StepProps) {
     }} loading={loading} valid={valid}>
       <div className="grid gap-1.5">
         <Label htmlFor="s6-school">School name</Label>
-        <Input id="s6-school" placeholder="e.g. SOS Hermann Gmeiner School" value={schoolName}
+        <Input id="s6-school" placeholder="e.g. Al Safa" value={schoolName}
           onChange={e => setSchoolName(e.target.value)} autoFocus />
       </div>
       <div className="grid gap-1.5">
@@ -387,8 +401,11 @@ function Step8({ data, onSubmit, onBack }: StepProps) {
   return (
     <StepShell step={8} title="First faculty choice" onBack={onBack} onSubmit={async () => {
       setLoading(true);
-      await onSubmit({ faculty_choice_1: choice }, `First choice faculty: ${choice}`);
-      setLoading(false);
+      try {
+        await onSubmit({ faculty_choice_1: choice }, `First choice faculty: ${choice}`);
+      } finally {
+        setLoading(false);
+      }
     }} loading={loading} valid={valid}>
       <div className="grid gap-1.5">
         <Label>Faculty (1st choice)</Label>
@@ -399,11 +416,7 @@ function Step8({ data, onSubmit, onBack }: StepProps) {
           </SelectContent>
         </Select>
       </div>
-      <p className="text-xs text-slate-500">
-        Note: Medicine &amp; Surgery, Science, Engineering, and Economic &amp;
-        Management Science are Tier 1 — you may pick{" "}
-        <strong>at most one</strong> of them across your three choices.
-      </p>
+      <p className="text-xs text-slate-500">{FACULTY_CHOICE_TIER1_NOTE}</p>
     </StepShell>
   );
 }
@@ -424,12 +437,17 @@ function Step9({ data, onSubmit, onBack }: StepProps) {
   });
   const [loading, setLoading] = useState(false);
 
-  // Each dropdown excludes the other two picks (and a second Tier 1)
-  const allowed2 = allowedFaculties([...first, choice3].filter(Boolean) as string[], 2);
-  const chosenFor3 = [...first, choice2].filter(Boolean) as string[];
-  const allowed3 = allowedFaculties(chosenFor3, 3);
+  // Choice 2/3: hide all Tier 1 + earlier picks (also hide the other later pick)
+  const allowed2 = allowedFaculties(
+    [...first, choice3].filter(Boolean) as string[],
+    2
+  );
+  const allowed3 = allowedFaculties(
+    [...first, choice2].filter(Boolean) as string[],
+    3
+  );
 
-  // Clear invalid picks if first choice / tier rules exclude them
+  // Clear later choices when an earlier pick makes them invalid
   useEffect(() => {
     if (choice2 && !allowedFaculties(first, 2).includes(choice2 as Faculty)) {
       setChoice2("");
@@ -460,11 +478,14 @@ function Step9({ data, onSubmit, onBack }: StepProps) {
       title="2nd & 3rd faculty choices"
       onSubmit={async () => {
         setLoading(true);
-        await onSubmit(
-          { faculty_choice_2: choice2, faculty_choice_3: choice3 },
-          `2nd choice: ${choice2}, 3rd choice: ${choice3}`
-        );
-        setLoading(false);
+        try {
+          await onSubmit(
+            { faculty_choice_2: choice2, faculty_choice_3: choice3 },
+            `2nd choice: ${choice2}, 3rd choice: ${choice3}`
+          );
+        } finally {
+          setLoading(false);
+        }
       }}
       loading={loading}
       valid={valid}
@@ -474,6 +495,7 @@ function Step9({ data, onSubmit, onBack }: StepProps) {
           1st choice: <strong>{data.faculty_choice_1}</strong>
         </p>
       )}
+      <p className="text-xs text-slate-500">{FACULTY_CHOICE_TIER1_NOTE}</p>
       <div className="grid gap-1.5">
         <Label>Faculty (2nd choice)</Label>
         <Select
@@ -551,23 +573,46 @@ function Step10({ data, onSubmit, onBack }: StepProps) {
   );
 }
 
-type UploadSlot = "photo" | "id" | "certificate" | "payment";
-const UPLOAD_SLOTS: { key: UploadSlot; label: string; accept: string }[] = [
+type DocUploadSlot = "photo" | "id" | "certificate";
+const DOC_UPLOAD_SLOTS: { key: DocUploadSlot; label: string; accept: string }[] = [
   { key: "photo",       label: "Passport photo",    accept: "image/*" },
   { key: "id",          label: "ID document",        accept: "image/*,.pdf" },
   { key: "certificate", label: "School certificate", accept: "image/*,.pdf" },
-  { key: "payment",     label: "Payment receipt",    accept: "image/*,.pdf" },
 ];
 
+async function uploadEnrollmentFile(
+  slot: "photo" | "id" | "certificate" | "payment",
+  file: File,
+  conversationId: string
+) {
+  const form = new FormData();
+  form.set("file", file);
+  form.set("slot", slot);
+  form.set("conversation_id", conversationId);
+  const res = await fetch("/api/enrollment/upload", {
+    method: "POST",
+    body: form,
+  });
+  const json = (await res.json().catch(() => null)) as {
+    ok?: boolean;
+    url?: string;
+    error?: string;
+  } | null;
+  if (!res.ok || !json?.ok || !json.url) {
+    throw new Error(json?.error || `Failed to upload ${slot}`);
+  }
+  return json.url;
+}
+
 function Step11({ data, onSubmit, onBack }: StepProps) {
-  const [files, setFiles] = useState<Partial<Record<UploadSlot, File>>>({});
-  const [previews, setPreviews] = useState<Partial<Record<UploadSlot, string>>>({});
+  const [files, setFiles] = useState<Partial<Record<DocUploadSlot, File>>>({});
+  const [previews, setPreviews] = useState<Partial<Record<DocUploadSlot, string>>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const fileInputRefs = useRef<Partial<Record<UploadSlot, HTMLInputElement>>>({});
-  const valid = UPLOAD_SLOTS.every((s) => !!files[s.key]);
+  const fileInputRefs = useRef<Partial<Record<DocUploadSlot, HTMLInputElement>>>({});
+  const valid = DOC_UPLOAD_SLOTS.every((s) => !!files[s.key]);
 
-  function clearSlot(key: UploadSlot) {
+  function clearSlot(key: DocUploadSlot) {
     setPreviews((p) => {
       const url = p[key];
       if (url) URL.revokeObjectURL(url);
@@ -583,7 +628,7 @@ function Step11({ data, onSubmit, onBack }: StepProps) {
     setError("");
   }
 
-  function handleFile(key: UploadSlot, f: File | null) {
+  function handleFile(key: DocUploadSlot, f: File | null) {
     if (!f) return;
     setError("");
     setPreviews((p) => {
@@ -608,7 +653,6 @@ function Step11({ data, onSubmit, onBack }: StepProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- revoke only on unmount
   }, []);
 
-  // Paste support
   useEffect(() => {
     function onPaste(e: ClipboardEvent) {
       const items = Array.from(e.clipboardData?.items ?? []);
@@ -616,32 +660,12 @@ function Step11({ data, onSubmit, onBack }: StepProps) {
       if (!imageItem) return;
       const f = imageItem.getAsFile();
       if (!f) return;
-      const emptySlot = UPLOAD_SLOTS.find((s) => !files[s.key]);
+      const emptySlot = DOC_UPLOAD_SLOTS.find((s) => !files[s.key]);
       if (emptySlot) handleFile(emptySlot.key, f);
     }
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
   }, [files]);
-
-  async function uploadSlot(slot: UploadSlot, file: File, conversationId: string) {
-    const form = new FormData();
-    form.set("file", file);
-    form.set("slot", slot);
-    form.set("conversation_id", conversationId);
-    const res = await fetch("/api/enrollment/upload", {
-      method: "POST",
-      body: form,
-    });
-    const json = (await res.json().catch(() => null)) as {
-      ok?: boolean;
-      url?: string;
-      error?: string;
-    } | null;
-    if (!res.ok || !json?.ok || !json.url) {
-      throw new Error(json?.error || `Failed to upload ${slot}`);
-    }
-    return json.url;
-  }
 
   async function handleSubmit() {
     setLoading(true);
@@ -652,11 +676,11 @@ function Step11({ data, onSubmit, onBack }: StepProps) {
         throw new Error("Missing conversation — close and reopen enrollment from chat.");
       }
 
-      const urlMap: Partial<Record<UploadSlot, string>> = {};
-      for (const slot of UPLOAD_SLOTS) {
+      const urlMap: Partial<Record<DocUploadSlot, string>> = {};
+      for (const slot of DOC_UPLOAD_SLOTS) {
         const f = files[slot.key];
         if (!f) throw new Error(`Missing ${slot.label}`);
-        urlMap[slot.key] = await uploadSlot(slot.key, f, conversationId);
+        urlMap[slot.key] = await uploadEnrollmentFile(slot.key, f, conversationId);
       }
 
       await onSubmit(
@@ -664,10 +688,9 @@ function Step11({ data, onSubmit, onBack }: StepProps) {
           doc_photo_url: urlMap.photo,
           doc_id_url: urlMap.id,
           doc_certificate_url: urlMap.certificate,
-          doc_payment_url: urlMap.payment,
           enrollment_step: 11,
         },
-        "Documents uploaded — application submitted for review."
+        "Documents uploaded"
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
@@ -679,7 +702,7 @@ function Step11({ data, onSubmit, onBack }: StepProps) {
   return (
     <StepShell step={11} title="Document uploads" onBack={onBack} onSubmit={handleSubmit} loading={loading} valid={valid}>
       <p className="text-xs text-slate-500">
-        Tap a card to upload, or paste an image (Ctrl+V / ⌘+V).
+        Upload your passport photo, ID, and school certificate. Payment comes next.
       </p>
       {error ? (
         <p className="rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-xs text-red-700">
@@ -687,7 +710,7 @@ function Step11({ data, onSubmit, onBack }: StepProps) {
         </p>
       ) : null}
       <div className="flex flex-wrap gap-2">
-        {UPLOAD_SLOTS.map((slot) => {
+        {DOC_UPLOAD_SLOTS.map((slot) => {
           const file = files[slot.key];
           const preview = previews[slot.key];
           const isImage = !!file && file.type.startsWith("image/");
@@ -695,7 +718,7 @@ function Step11({ data, onSubmit, onBack }: StepProps) {
           return (
             <div
               key={slot.key}
-              className="relative flex aspect-video w-[calc(50%-0.25rem)] min-w-[7.5rem] flex-col overflow-hidden rounded-lg border border-dashed border-slate-200 bg-slate-50/60 sm:w-[calc(25%-0.375rem)]"
+              className="relative flex aspect-video w-[calc(50%-0.25rem)] min-w-[7.5rem] flex-col overflow-hidden rounded-lg border border-dashed border-slate-200 bg-slate-50/60 sm:w-[calc(33.333%-0.34rem)]"
             >
               <button
                 type="button"
@@ -768,13 +791,236 @@ function Step11({ data, onSubmit, onBack }: StepProps) {
   );
 }
 
+function Step12({ data, onSubmit, onBack, onCancel }: StepProps) {
+  const [method, setMethod] = useState<PaymentMethod | "">(
+    data.payment_method === "bank_receipt" || data.payment_method === "office_delivery"
+      ? data.payment_method
+      : ""
+  );
+  const [receipt, setReceipt] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [savedLater, setSavedLater] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (preview) URL.revokeObjectURL(preview);
+    };
+  }, [preview]);
+
+  function clearReceipt() {
+    if (preview) URL.revokeObjectURL(preview);
+    setPreview(null);
+    setReceipt(null);
+    setError("");
+  }
+
+  function handleReceipt(f: File | null) {
+    if (!f) return;
+    setError("");
+    setMethod("bank_receipt");
+    if (preview) URL.revokeObjectURL(preview);
+    setPreview(f.type.startsWith("image/") ? URL.createObjectURL(f) : null);
+    setReceipt(f);
+  }
+
+  const canSubmit =
+    method === "office_delivery" ||
+    (method === "bank_receipt" && !!receipt);
+
+  async function handleSubmit() {
+    if (!canSubmit) return;
+    setLoading(true);
+    setError("");
+    try {
+      const conversationId = data.conversation_id?.trim();
+      if (!conversationId) {
+        throw new Error("Missing conversation — close and reopen enrollment from chat.");
+      }
+
+      let doc_payment_url = data.doc_payment_url;
+      if (method === "bank_receipt") {
+        if (!receipt) throw new Error("Add your bank receipt, or save and continue later.");
+        doc_payment_url = await uploadEnrollmentFile("payment", receipt, conversationId);
+      }
+
+      await onSubmit(
+        {
+          payment_method: method,
+          ...(doc_payment_url ? { doc_payment_url } : {}),
+          enrollment_step: 12,
+        },
+        method === "office_delivery"
+          ? "Payment: will deliver receipt to the office."
+          : "Payment receipt uploaded."
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save payment choice");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleContinueLater() {
+    setLoading(true);
+    setError("");
+    try {
+      await onSubmit(
+        {
+          payment_method: "bank_receipt",
+          enrollment_step: 11,
+        },
+        "Payment pending — continue later with your bank receipt.",
+        { deferComplete: true }
+      );
+      setSavedLater(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save progress");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (savedLater) {
+    return (
+      <div className="space-y-3 py-2 text-center">
+        <p className="text-sm font-semibold text-slate-800">Saved — still in progress</p>
+        <p className="text-xs text-slate-500">
+          Come back once you have the bank receipt paper. Your application stays in progress until then.
+        </p>
+        <Button
+          type="button"
+          className="bg-sky-600 hover:bg-sky-700 text-white"
+          onClick={onCancel}
+        >
+          Back to chat
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <StepShell
+      step={12}
+      title="Exam fee payment"
+      onBack={onBack}
+      onSubmit={handleSubmit}
+      loading={loading}
+      valid={canSubmit}
+      submitLabel="Submit Application"
+      footerExtra={
+        method === "bank_receipt" && !receipt ? (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={loading}
+            onClick={() => void handleContinueLater()}
+            className="border-slate-200 text-slate-700"
+          >
+            Save &amp; continue later
+          </Button>
+        ) : null
+      }
+    >
+      <p className="text-xs text-slate-500">
+        How will you provide the bank payment receipt?
+      </p>
+      {error ? (
+        <p className="rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-xs text-red-700">
+          {error}
+        </p>
+      ) : null}
+
+      <div className="grid gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setMethod("bank_receipt");
+            setSavedLater(false);
+          }}
+          className={`rounded-lg border px-3 py-2.5 text-left transition-colors ${
+            method === "bank_receipt"
+              ? "border-sky-400 bg-sky-50 ring-1 ring-sky-200"
+              : "border-slate-200 hover:bg-slate-50"
+          }`}
+        >
+          <p className="text-sm font-medium text-slate-800">Upload bank receipt</p>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            Optional for now — if you don&apos;t have the paper yet, save and continue later. Your application stays in progress.
+          </p>
+        </button>
+
+        {method === "bank_receipt" ? (
+          <div className="relative ml-1 overflow-hidden rounded-lg border border-dashed border-slate-200 bg-slate-50/60">
+            <button
+              type="button"
+              className="flex w-full items-center gap-3 px-3 py-3 text-left"
+              onClick={() => fileRef.current?.click()}
+            >
+              {preview ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={preview} alt="Receipt" className="h-12 w-16 rounded object-cover" />
+              ) : (
+                <Paperclip className="h-4 w-4 shrink-0 text-sky-600" />
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium text-slate-700">
+                  {receipt ? receipt.name : "Tap to upload receipt (image or PDF)"}
+                </p>
+                <p className="text-[10px] text-slate-400">Optional until you have it</p>
+              </div>
+            </button>
+            {receipt ? (
+              <button
+                type="button"
+                className="absolute right-2 top-2 rounded-full bg-white/90 p-0.5 shadow-sm"
+                onClick={clearReceipt}
+              >
+                <X className="h-3.5 w-3.5 text-slate-500" />
+              </button>
+            ) : null}
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*,.pdf"
+              className="hidden"
+              onChange={(e) => handleReceipt(e.target.files?.[0] ?? null)}
+            />
+          </div>
+        ) : null}
+
+        <button
+          type="button"
+          onClick={() => {
+            clearReceipt();
+            setMethod("office_delivery");
+            setSavedLater(false);
+          }}
+          className={`rounded-lg border px-3 py-2.5 text-left transition-colors ${
+            method === "office_delivery"
+              ? "border-sky-400 bg-sky-50 ring-1 ring-sky-200"
+              : "border-slate-200 hover:bg-slate-50"
+          }`}
+        >
+          <p className="text-sm font-medium text-slate-800">Deliver to the office</p>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            I confirm I will bring the bank receipt to the SNU office in person.
+          </p>
+        </button>
+      </div>
+    </StepShell>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* Step map                                                             */
 /* ------------------------------------------------------------------ */
 
 const STEPS: React.ComponentType<StepProps>[] = [
   Step1, Step2, Step3, Step4, Step5, Step6, Step7,
-  Step8, Step9, Step10, Step11,
+  Step8, Step9, Step10, Step11, Step12,
 ];
 
 /* ------------------------------------------------------------------ */
@@ -840,9 +1086,12 @@ export function EnrollmentPanel({
         }
 
         setDone(false);
-        const savedStep = Number(record.enrollment_step ?? 0);
+        const resumeAt =
+          nextIncompleteEnrollmentStep(record) ??
+          Number(record.enrollment_step ?? 0) + 1;
+        // resumeAt is 1-based step number
         setCurrentStep(
-          Math.max(0, Math.min(savedStep, TOTAL_STEPS - 1))
+          Math.max(0, Math.min(resumeAt - 1, TOTAL_STEPS - 1))
         );
       })
       .catch(() => {
@@ -851,9 +1100,13 @@ export function EnrollmentPanel({
   }, [open, conversationId]);
 
   const handleStepSubmit: StepSubmitFn = useCallback(
-    async (fields) => {
+    async (fields, _label, opts) => {
       // Accept either (fields) or legacy (fields, label) — never post to chat
-      const nextStep = currentStep + 1;
+      const deferComplete = opts?.deferComplete === true;
+      const nextStep =
+        typeof fields.enrollment_step === "number"
+          ? fields.enrollment_step
+          : currentStep + 1;
       const merged: EnrollmentData = {
         ...enrollData,
         ...fields,
@@ -877,6 +1130,7 @@ export function EnrollmentPanel({
           body: JSON.stringify(merged),
         });
         const json = (await res.json().catch(() => null)) as {
+          error?: string;
           confirmation_message?: string;
           message?: {
             id: string;
@@ -885,26 +1139,39 @@ export function EnrollmentPanel({
             created_at: string;
           } | null;
         } | null;
+        if (!res.ok) {
+          throw new Error(json?.error || "Could not save enrollment step");
+        }
         confirmation = json?.confirmation_message?.trim() || null;
         confirmationRow = json?.message ?? null;
-      } catch {
-        // Non-fatal — local state is still updated
+      } catch (err) {
+        // Roll back optimistic merge on hard failures (e.g. invalid faculty)
+        setEnrollData(enrollData);
+        throw err;
       }
 
-      if (nextStep >= STEPS.length) {
+      const finished =
+        !deferComplete &&
+        nextStep >= STEPS.length &&
+        isPaymentChoiceComplete(merged);
+
+      if (finished) {
         setDone(true);
         const text =
           confirmation ||
           enrollmentReceivedConfirmationMessage({
             fullName: merged.full_name,
-            phone: merged.phone,
+            paymentState: enrollmentPaymentState(merged),
           });
         onComplete?.({
           confirmation: text,
           message: confirmationRow,
         });
-      } else {
+      } else if (!deferComplete && nextStep < STEPS.length) {
         setCurrentStep(nextStep);
+      } else if (deferComplete) {
+        // Stay on payment step (or reopen there later via enrollment_step)
+        setCurrentStep(Math.min(nextStep, STEPS.length - 1));
       }
     },
     [currentStep, enrollData, conversationId, onComplete]
@@ -946,9 +1213,27 @@ export function EnrollmentPanel({
             <div className="text-center py-6">
               <p className="font-semibold text-slate-800">Application received</p>
               <p className="text-sm text-slate-500 mt-1">
-                Status: <strong>Under review</strong>. Check the chat for how to track your application.
+                Status: <strong>Under review</strong>
+                {enrollData.payment_method === "office_delivery" ||
+                (enrollData.payment_method === "bank_receipt" &&
+                  !enrollData.doc_payment_url)
+                  ? (
+                    <>
+                      . Payment: <strong>pending</strong>
+                      {enrollData.payment_method === "office_delivery"
+                        ? " (bring your receipt to the office)"
+                        : ""}
+                    </>
+                  ) : null}
+                . Check the chat for how to track your application.
               </p>
-              <Button className="mt-4 bg-sky-600 hover:bg-sky-700 text-white" onClick={onClose}>
+              <Button
+                className="mt-4 bg-sky-600 hover:bg-sky-700 text-white"
+                onClick={() => {
+                  // Finished — close without a "paused" reminder
+                  onClose();
+                }}
+              >
                 Back to chat
               </Button>
             </div>

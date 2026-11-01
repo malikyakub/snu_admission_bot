@@ -198,6 +198,9 @@ create table if not exists public.students (
   doc_id_url text,
   doc_certificate_url text,
   doc_payment_url text,
+  -- payment (optional until student chooses / uploads)
+  payment_method text, -- 'bank_receipt' | 'office_delivery'
+  bank_reference_number text,
   -- meta
   conversation_id text unique,
   enrollment_step integer not null default 0,
@@ -238,6 +241,8 @@ alter table public.students add column if not exists doc_photo_url text;
 alter table public.students add column if not exists doc_id_url text;
 alter table public.students add column if not exists doc_certificate_url text;
 alter table public.students add column if not exists doc_payment_url text;
+alter table public.students add column if not exists payment_method text;
+alter table public.students add column if not exists bank_reference_number text;
 alter table public.students add column if not exists conversation_id text;
 alter table public.students add column if not exists enrollment_step integer not null default 0;
 alter table public.students add column if not exists created_at timestamptz not null default now();

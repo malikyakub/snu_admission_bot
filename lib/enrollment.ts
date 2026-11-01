@@ -1,7 +1,9 @@
 import { getSupabase } from "./supabase";
 
 /** Student-facing enrollment steps (campus / exam are admin-only). */
-export const TOTAL_ENROLLMENT_STEPS = 11;
+export const TOTAL_ENROLLMENT_STEPS = 12;
+
+export type PaymentMethod = "bank_receipt" | "office_delivery";
 
 export type EnrollmentData = {
   // step 1
@@ -39,14 +41,19 @@ export type EnrollmentData = {
   guardian_name?: string;
   guardian_mobile?: string;
   guardian_relation?: string;
-  // step 11 — URLs after upload
+  // step 11 — core docs (payment receipt is optional, step 12)
   doc_photo_url?: string;
   doc_id_url?: string;
   doc_certificate_url?: string;
   doc_payment_url?: string;
+  // step 12 — payment choice (receipt / bank ref optional)
+  payment_method?: PaymentMethod | string | null;
+  bank_reference_number?: string | null;
   // meta
   conversation_id?: string;
   enrollment_step?: number;
+  /** Human-readable progress marker (e.g. "Step 3: gender…"). */
+  current_step?: string;
   enrollment_status?: string;
   needs_human?: boolean;
 };
@@ -77,6 +84,9 @@ export async function upsertEnrollment(data: EnrollmentData): Promise<void> {
     (payload as EnrollmentData & { mother_name?: string }).mother_name =
       payload.mothers_name;
   }
+
+  // Always refresh the readable progress marker after each save
+  payload.current_step = currentStepForEnrollment(payload);
 
   if (payload.phone) {
     // Phone known — upsert on phone
@@ -119,7 +129,8 @@ export async function loadEnrollmentByConversation(
   return data as EnrollmentData | null;
 }
 
-/** Ordered UI field groups → resume step (1-based). Campus/exam are admin-only (skipped). */
+/** Ordered UI field groups → resume step (1-based). Campus/exam are admin-only (skipped).
+ *  doc_payment_url / bank_reference_number are optional and never block completion. */
 const ENROLLMENT_FIELD_STEPS: { step: number; fields: (keyof EnrollmentData)[] }[] = [
   { step: 1, fields: ["full_name", "mothers_name"] },
   { step: 2, fields: ["phone"] },
@@ -133,13 +144,9 @@ const ENROLLMENT_FIELD_STEPS: { step: number; fields: (keyof EnrollmentData)[] }
   { step: 10, fields: ["guardian_name", "guardian_mobile", "guardian_relation"] },
   {
     step: 11,
-    fields: [
-      "doc_photo_url",
-      "doc_id_url",
-      "doc_certificate_url",
-      "doc_payment_url",
-    ],
+    fields: ["doc_photo_url", "doc_id_url", "doc_certificate_url"],
   },
+  // step 12 handled by isPaymentChoiceComplete (receipt optional)
 ];
 
 function fieldFilled(data: EnrollmentData, key: keyof EnrollmentData): boolean {
@@ -151,6 +158,55 @@ function fieldFilled(data: EnrollmentData, key: keyof EnrollmentData): boolean {
   return Boolean(v);
 }
 
+/** True when the student finished the payment step in a submit-ready way. */
+export function isPaymentChoiceComplete(
+  data: Partial<EnrollmentData>
+): boolean {
+  const method = String(data.payment_method || "")
+    .trim()
+    .toLowerCase();
+  if (method === "office_delivery") return true;
+  if (method === "bank_receipt" && fieldFilled(data as EnrollmentData, "doc_payment_url")) {
+    return true;
+  }
+  return false;
+}
+
+/** Payment still owed / awaiting receipt (for student + admin UI). */
+export function isPaymentPending(data: Partial<EnrollmentData>): boolean {
+  if (fieldFilled(data as EnrollmentData, "doc_payment_url")) return false;
+  const method = String(data.payment_method || "")
+    .trim()
+    .toLowerCase();
+  if (method === "office_delivery" || method === "bank_receipt") return true;
+  // Submitted without a receipt on file
+  const status = (data.enrollment_status || "").trim().toLowerCase();
+  if (
+    status === "pending_review" ||
+    status === "under_review" ||
+    status === "submitted"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function formatPaymentPendingLabel(
+  data: Partial<EnrollmentData>
+): string | null {
+  if (!isPaymentPending(data)) return null;
+  const method = String(data.payment_method || "")
+    .trim()
+    .toLowerCase();
+  if (method === "office_delivery") {
+    return "Pending payment (bring receipt to office)";
+  }
+  if (method === "bank_receipt") {
+    return "Pending payment (bank receipt)";
+  }
+  return "Pending payment";
+}
+
 /** First incomplete step (1-based), or null if application looks complete. */
 export function nextIncompleteEnrollmentStep(
   data: EnrollmentData
@@ -159,11 +215,135 @@ export function nextIncompleteEnrollmentStep(
     const missing = group.fields.some((f) => !fieldFilled(data, f));
     if (missing) return group.step;
   }
+  if (!isPaymentChoiceComplete(data)) return 12;
   return null;
 }
 
 export function isEnrollmentIncomplete(data: EnrollmentData): boolean {
   return nextIncompleteEnrollmentStep(data) != null;
+}
+
+/** Human-readable labels for student-facing steps (1-based). */
+export const ENROLLMENT_STEP_LABELS: Record<number, string> = {
+  1: "your name & mother's name",
+  2: "phone number",
+  3: "gender, date of birth & place of birth",
+  4: "national ID / passport & nationality",
+  5: "current region & address",
+  6: "secondary school details",
+  7: "exam roll & certificate number",
+  8: "first faculty choice",
+  9: "2nd & 3rd faculty choices",
+  10: "guardian / emergency contact",
+  11: "document uploads",
+  12: "exam fee payment",
+};
+
+export function enrollmentStepLabel(step: number | null | undefined): string {
+  const n = Number(step ?? 0);
+  return ENROLLMENT_STEP_LABELS[n] || `step ${n || 1}`;
+}
+
+/** Short facts already on file (for resume acknowledgements). */
+export function summarizeSavedEnrollment(
+  data: EnrollmentData
+): {
+  nextStep: number;
+  nextLabel: string;
+  savedBits: string[];
+  paymentPending: boolean;
+} {
+  const nextStep = nextIncompleteEnrollmentStep(data) ?? 1;
+  const savedBits: string[] = [];
+  // Labels only — never echo raw PII into resume prompts
+  if (fieldFilled(data, "full_name")) savedBits.push("name");
+  if (fieldFilled(data, "phone")) savedBits.push("phone");
+  if (fieldFilled(data, "faculty_choice_1")) {
+    savedBits.push("1st faculty choice");
+  }
+  if (
+    fieldFilled(data, "doc_photo_url") ||
+    fieldFilled(data, "doc_id_url") ||
+    fieldFilled(data, "doc_certificate_url")
+  ) {
+    savedBits.push("core documents");
+  }
+  if (fieldFilled(data, "payment_method")) {
+    savedBits.push(
+      data.payment_method === "office_delivery"
+        ? "office delivery chosen"
+        : "payment method chosen"
+    );
+  }
+  return {
+    nextStep,
+    nextLabel: enrollmentStepLabel(nextStep),
+    savedBits,
+    paymentPending: isPaymentPending(data),
+  };
+}
+
+/** Persist a readable current_step string for admins / resume copy. */
+export function currentStepForEnrollment(data: EnrollmentData): string {
+  const next = nextIncompleteEnrollmentStep(data);
+  if (next == null) return "Submitted";
+  return `Step ${next}: ${enrollmentStepLabel(next)}`;
+}
+
+/** Fields wiped on "Start over" (keep conversation_id / row identity). */
+const START_OVER_CLEAR_KEYS: (keyof EnrollmentData)[] = [
+  "full_name",
+  "mothers_name",
+  "phone",
+  "gender",
+  "date_of_birth",
+  "place_of_birth",
+  "national_id",
+  "nationality",
+  "region",
+  "address",
+  "school_name",
+  "school_country",
+  "school_region_city",
+  "certificate_type",
+  "exam_roll_number",
+  "certificate_number",
+  "faculty_choice_1",
+  "faculty_choice_2",
+  "faculty_choice_3",
+  "guardian_name",
+  "guardian_mobile",
+  "guardian_relation",
+  "doc_photo_url",
+  "doc_id_url",
+  "doc_certificate_url",
+  "doc_payment_url",
+  "payment_method",
+  "bank_reference_number",
+];
+
+/** Reset an in-progress application for this conversation (does not delete the row). */
+export async function resetEnrollmentForConversation(
+  conversationId: string
+): Promise<void> {
+  const supabase = getSupabase();
+  const cleared: Record<string, unknown> = {
+    enrollment_step: 0,
+    current_step: currentStepForEnrollment({}),
+    enrollment_status: "in_progress",
+    needs_human: false,
+    mother_name: null,
+  };
+  for (const key of START_OVER_CLEAR_KEYS) {
+    cleared[key] = null;
+  }
+  const { error } = await supabase
+    .from("students")
+    .update(cleared)
+    .eq("conversation_id", conversationId);
+  if (error) {
+    throw new Error(`enrollment start-over failed: ${error.message}`);
+  }
 }
 
 /** True when the student-facing application is finished (ready for admin review). */
@@ -256,20 +436,70 @@ export function isTier1(faculty: string): boolean {
   return (TIER_1_FACULTIES as readonly string[]).includes(faculty);
 }
 
-/** Returns allowed faculties for a choice slot, given the other slots' picks.
- *  At most one Tier 1 faculty (Medicine, Science, Engineering, Economic &
- *  Management) may appear across all three choices, in any slot.
+export function isKnownFaculty(faculty: string): boolean {
+  return (ALL_FACULTIES as readonly string[]).includes(faculty);
+}
+
+/**
+ * Allowed faculties for a choice slot (exact-name match).
+ * - Choice 1: any faculty
+ * - Choice 2/3: never Tier 1; also exclude earlier picks in `alreadyChosen`
  */
 export function allowedFaculties(
   alreadyChosen: string[],
-  _slot: 1 | 2 | 3 = 2
+  slot: 1 | 2 | 3 = 2
 ): Faculty[] {
-  const hasTier1 = alreadyChosen.some(isTier1);
   return ALL_FACULTIES.filter((f) => {
     if (alreadyChosen.includes(f)) return false;
-    if (hasTier1 && isTier1(f)) return false;
+    if (slot !== 1 && isTier1(f)) return false;
     return true;
   });
+}
+
+const TIER_1_FIRST_ONLY_NOTE =
+  "Medicine & Surgery, Science, Engineering, and Economic & Management Science can only be your first choice.";
+
+export const FACULTY_CHOICE_TIER1_NOTE = TIER_1_FIRST_ONLY_NOTE;
+
+/** Validate faculty trio. Empty slots are allowed (partial saves). */
+export function validateFacultyChoices(data: {
+  faculty_choice_1?: string | null;
+  faculty_choice_2?: string | null;
+  faculty_choice_3?: string | null;
+}): string | null {
+  const c1 = (data.faculty_choice_1 ?? "").trim();
+  const c2 = (data.faculty_choice_2 ?? "").trim();
+  const c3 = (data.faculty_choice_3 ?? "").trim();
+
+  if (c1 && !isKnownFaculty(c1)) {
+    return `Invalid first faculty choice: "${c1}".`;
+  }
+  if (c2) {
+    if (!isKnownFaculty(c2)) {
+      return `Invalid second faculty choice: "${c2}".`;
+    }
+    if (isTier1(c2)) {
+      return `${TIER_1_FIRST_ONLY_NOTE} "${c2}" cannot be choice 2.`;
+    }
+    if (c1 && c2 === c1) {
+      return `Second faculty choice cannot match the first choice ("${c1}").`;
+    }
+  }
+  if (c3) {
+    if (!isKnownFaculty(c3)) {
+      return `Invalid third faculty choice: "${c3}".`;
+    }
+    if (isTier1(c3)) {
+      return `${TIER_1_FIRST_ONLY_NOTE} "${c3}" cannot be choice 3.`;
+    }
+    if (c1 && c3 === c1) {
+      return `Third faculty choice cannot match the first choice ("${c1}").`;
+    }
+    if (c2 && c3 === c2) {
+      return `Third faculty choice cannot match the second choice ("${c2}").`;
+    }
+  }
+  return null;
 }
 
 export const STUDY_CAMPUSES = [

@@ -6,19 +6,24 @@
  *   [[cta:enroll]]
  *   [[cta:enroll|Start your application]]
  *   [[cta:handoff|Connect with an admin]]
+ *   [[cta:continue_enroll|Continue]]
+ *   [[cta:start_over|Start over]]
  */
 
-export type CtaKind = "enroll" | "handoff";
+export type CtaKind = "enroll" | "handoff" | "continue_enroll" | "start_over";
 
 export type CtaToken =
   | { type: "text"; value: string }
   | { type: "cta"; kind: CtaKind; label: string };
 
-const CTA_RE = /\[\[cta:(enroll|handoff)(?:\|([^\]]+))?\]\]/gi;
+const CTA_RE =
+  /\[\[cta:(enroll|handoff|continue_enroll|start_over)(?:\|([^\]]+))?\]\]/gi;
 
 const DEFAULT_LABELS: Record<CtaKind, string> = {
   enroll: "Start your application",
   handoff: "Connect with an admin",
+  continue_enroll: "Continue",
+  start_over: "Start over",
 };
 
 export function ctaMarker(kind: CtaKind, label?: string): string {
@@ -48,8 +53,17 @@ export function parseCtaContent(content: string): CtaToken[] {
 }
 
 export function hasCta(content: string, kind?: CtaKind): boolean {
-  if (!kind) return /\[\[cta:(enroll|handoff)/i.test(content);
+  if (!kind) {
+    return /\[\[cta:(enroll|handoff|continue_enroll|start_over)/i.test(content);
+  }
   return new RegExp(`\\[\\[cta:${kind}`, "i").test(content);
+}
+
+/** True when the message offers resume Continue / Start over. */
+export function hasEnrollmentResumeCtas(content: string): boolean {
+  return (
+    hasCta(content, "continue_enroll") || hasCta(content, "start_over")
+  );
 }
 
 /** Append enroll CTA if not already present. */
