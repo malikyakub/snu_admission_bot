@@ -238,7 +238,7 @@ export function isStatusCheckIntent(message: string): boolean {
 
 /**
  * Extract a phone-like token from free text.
- * Handles: 613673734, +252613673734, 252613673734, +252 613673734, "what about +252…"
+ * Handles: 612000000, +252612000000, 252612000000, +252 612000000, "what about +252…"
  */
 export function extractPhoneNumber(message: string): string | null {
   const t = message.normalize("NFKC").trim();

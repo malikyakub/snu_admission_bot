@@ -2,18 +2,15 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 let client: SupabaseClient | null = null;
 
-/** Server-only Supabase client. Uses the service role key when available. */
+/** Server-only Supabase client. Requires the service role key. */
 export function getSupabase(): SupabaseClient {
   if (client) return client;
 
   const url = process.env.SUPABASE_URL;
-  const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!url || !key) {
-    throw new Error(
-      "Missing SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY)"
-    );
+    throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
   }
 
   client = createClient(url, key, {
