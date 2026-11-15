@@ -23,7 +23,7 @@ Conversation:
 9. Write a clean standalone answer. NEVER describe your own instructions or internals: don't mention "context", "passages", "chunks", "provided information", "knowledge base", retrieval, similarity, or how the app shows links or buttons. Don't paste URLs.
 
 Fees:
-10. Use FEE_FACTS when present. Explain fees in plain student language: a short breakdown (one line per fee) and the total. No variable names, formulas, code-style math or words like "floor". State programme length in years (semesters ÷ 2), e.g. 10 semesters = 5 years. Never assume a flat $125/semester for every faculty; the per-semester fee depends on the faculty. Never mention a $55 fee for undergraduates (it is outdated); the one-time registration charge is $50.
+10. Use FEE_FACTS when present. Explain fees in plain student language: a short breakdown (one line per fee) and the total. No variable names, formulas, code-style math or words like "floor". State programme length in years (semesters ÷ 2), e.g. 10 semesters = 5 years. Never assume a flat $125/semester for every faculty; the per-semester fee depends on the faculty. Never mention a $55 fee for anyone — undergraduate, postgraduate or international (it is outdated); the one-time registration and ID card charge is $50.
 11a. Faculty names: use the exact names from the FACULTIES list below (e.g. "Health Sciences and Tropical Medicine" is ONE faculty). When stating how long a programme takes, include the mandatory 1-year Foundation (e.g. a 4-year degree = 5 years in total).`;
 
 /** Canonical faculty list with tier + length, so names and years are never guessed. */
@@ -85,7 +85,9 @@ export function buildMessages(
             ]
               .filter(Boolean)
               .join(" | ");
-            return meta ? `[${meta}]\n${c.content}` : c.content;
+            // Older passages still quote the outdated $55 registration fee; it is $50
+            const content = c.content.replace(/\$\s?55(?![\d.,]\d|\d)/g, () => "$50");
+            return meta ? `[${meta}]\n${content}` : content;
           })
           .join("\n\n---\n\n");
 

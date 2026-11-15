@@ -113,8 +113,14 @@ const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 /** Used when the primary model hits daily/minute rate limits. */
 const GROQ_FALLBACK_MODEL =
-  process.env.GROQ_FALLBACK_MODEL || "llama-3.1-8b-instant";
+  process.env.GROQ_FALLBACK_MODEL || "openai/gpt-oss-20b";
 const TOP_K = 5;
+
+/** Student-facing text when the AI provider fails — never raw provider errors. */
+const AI_BUSY_MESSAGE =
+  "SNUBot is getting a lot of questions right now. Please wait a minute and try again.";
+const AI_UNAVAILABLE_MESSAGE =
+  "SNUBot couldn't answer just now. Please try again in a moment.";
 
 const EMPTY_INTENT = {
   topic: null,
@@ -289,7 +295,7 @@ async function groqChatCompletions(opts: {
     return res;
   }
 
-  const primaryDetail = await res.text().catch(() => "");
+  await res.text().catch(() => "");
   console.warn(
     `[/api/chat] ${GROQ_MODEL} rate-limited; retrying with ${GROQ_FALLBACK_MODEL}`,
   );
@@ -301,15 +307,15 @@ async function groqChatCompletions(opts: {
     signal: opts.signal,
   });
 
-  if (!res.ok && res.status === 429) {
-    // Prefer a clean client message over dumping Groq JSON
+  if (!res.ok) {
+    // Main model is rate-limited and the fallback failed too (any reason):
+    // log the provider detail server-side, give the student one clean message.
+    const fallbackDetail = await res.text().catch(() => "");
+    console.error(
+      `[/api/chat] fallback ${GROQ_FALLBACK_MODEL} failed (${res.status}): ${fallbackDetail.slice(0, 400)}`,
+    );
     return new Response(
-      JSON.stringify({
-        error:
-          "The AI service is temporarily rate-limited. Please wait a minute and try again.",
-        code: "rate_limit_exceeded",
-        detail: primaryDetail.slice(0, 400),
-      }),
+      JSON.stringify({ error: AI_BUSY_MESSAGE, code: "rate_limit_exceeded" }),
       { status: 429, headers: { "Content-Type": "application/json" } },
     );
   }
@@ -1199,17 +1205,32 @@ export async function POST(req: Request) {
     // --- RAG path ---
     const intent = detectIntentWithHistory(message, history);
 
-    // Clearly off-topic: one friendly steer-back, never a handoff button
+    // Clearly off-topic: one short steer-back plus an offer to reach a human admin
     if (
       !enrollInterest &&
       !isStatusCheckIntent(message) &&
       isClearlyOffTopic(message, intent)
     ) {
+      let offered = false;
+      try {
+        if (!conversation) {
+          conversation = await createConversation({ ipAddress: clientIp });
+        }
+        await markHandoffOffered(conversation.id);
+        conversation = { ...conversation, handoff_offered: true };
+        offered = true;
+      } catch (err) {
+        console.warn(
+          "[/api/chat] handoff_offered (off-topic):",
+          err instanceof Error ? err.message : err,
+        );
+      }
+
       return jsonReply(conversation?.id ?? null, message, {
-        answer: offTopicSteerMessage(),
+        answer: appendHandoffOffer(offTopicSteerMessage()),
         conversation_id: conversation?.id ?? null,
         needs_human: false,
-        handoff_offered: false,
+        handoff_offered: offered,
         low_confidence: false,
         top_similarity: null,
         intent: { ...EMPTY_INTENT, topic: "off_topic" },
@@ -1409,17 +1430,17 @@ export async function POST(req: Request) {
 
     if (!groqRes.ok) {
       if (groqRes.status === 429) {
-        const payload = (await groqRes.json().catch(() => null)) as {
-          error?: string;
-        } | null;
-        return jsonError(
-          payload?.error ||
-            "The AI service is temporarily rate-limited. Please wait a minute and try again.",
-          429,
+        return Response.json(
+          { error: AI_BUSY_MESSAGE, code: "rate_limit_exceeded" },
+          { status: 429 },
         );
       }
-      const detail = await groqRes.text();
-      return jsonError(`Groq error (${groqRes.status}): ${detail}`, 502);
+      // Keep provider details in the server log only
+      const detail = await groqRes.text().catch(() => "");
+      console.error(
+        `[/api/chat] AI provider error (${groqRes.status}): ${detail.slice(0, 400)}`,
+      );
+      return jsonError(AI_UNAVAILABLE_MESSAGE, 502);
     }
 
     // Handoff CTA is rule-based only: never leave a model-emitted handoff marker.
@@ -1445,6 +1466,20 @@ export async function POST(req: Request) {
       // Never show the button when the question was answered
       if (answerWasFulfilled(text)) return false;
       return true;
+    }
+
+    // Off-topic question that slipped past the keyword check: nothing relevant
+    // was retrieved and it isn't about admissions. If the model had no real
+    // answer, add the steer-back and the admin offer after its short reply.
+    const offTopicCandidate =
+      lowConfidence &&
+      !enrollInterest &&
+      !phoneOnly &&
+      !statusAskPending &&
+      !isAdmissionsOnTopic(message, intent);
+
+    function shouldAppendOffTopicSteer(text: string): boolean {
+      return offTopicCandidate && !answerWasFulfilled(text);
     }
 
     let handoffOfferedThisTurn = false;
@@ -1490,6 +1525,8 @@ export async function POST(req: Request) {
       let text = stripHandoffCta(raw);
       if (shouldAppendHandoff(text)) {
         text = appendHandoffOffer(text);
+      } else if (shouldAppendOffTopicSteer(text)) {
+        text = appendHandoffOffer(`${text}\n\n${offTopicSteerMessage()}`);
       }
       if (statusAskPending) text += `\n\n${statusAskForPhoneMessage()}`;
       if (enrollInterest && !hasCta(text, "enroll")) {
@@ -1515,6 +1552,11 @@ export async function POST(req: Request) {
         } else {
           extra += `\n\n${ctaMarker("handoff", "Connect with an admin")}`;
         }
+      } else if (
+        shouldAppendOffTopicSteer(trimmed) &&
+        !hasCta(trimmed, "handoff")
+      ) {
+        extra += `\n\n${offTopicSteerMessage()}\n\n${ctaMarker("handoff", "Connect with an admin")}`;
       }
       if (statusAskPending) extra += `\n\n${statusAskForPhoneMessage()}`;
       if (
@@ -1643,6 +1685,6 @@ export async function POST(req: Request) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
     console.error("[/api/chat]", msg);
-    return jsonError(msg, 500);
+    return jsonError(AI_UNAVAILABLE_MESSAGE, 500);
   }
 }
