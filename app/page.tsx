@@ -713,14 +713,10 @@ export default function HomePage() {
         parsed?.code === "rate_limit_exceeded" ||
         /rate.?limit/i.test(detail)
       ) {
-        throw new Error(
-          parsed?.error ||
-            "The AI service is temporarily rate-limited. Please wait a minute and try again."
-        );
+        throw new Error("rate limit");
       }
-      throw new Error(
-        parsed?.error || `Server error (${res.status}): ${detail}`
-      );
+      // Internal only (never rendered): raw server text must not reach the student
+      throw new Error(`Server error (${res.status})`);
     }
 
     if (!res.body) throw new Error("Empty response body");
@@ -1172,7 +1168,7 @@ export default function HomePage() {
         const rateLimited = /rate.?limit/i.test(detail);
         const errorMsg =
           (rateLimited
-            ? "The AI service hit a temporary rate limit. Please wait a minute and try again — or talk to an admin."
+            ? "SNUBot is getting a lot of questions right now. Please wait a minute and try again, or talk to an admin."
             : "Sorry — something went wrong. Please try again, or talk to an admin.") +
           `\n\n${ctaMarker("handoff", "Talk to an admin")}`;
         setMessages((prev) => {
@@ -1186,13 +1182,8 @@ export default function HomePage() {
           }
           return next;
         });
-        toast({
-          title: rateLimited ? "Rate limited" : "Request failed",
-          description: rateLimited
-            ? "Daily/minute AI quota was reached — retry shortly or talk to an admin."
-            : detail.slice(0, 160),
-          variant: "error",
-        });
+        // The chat bubble above is the only notice: no toast (they stacked up)
+        // and never the raw server/provider error text.
       }
     } finally {
       if (timeoutId) clearTimeout(timeoutId);

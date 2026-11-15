@@ -18,7 +18,7 @@ const HANDOFF_CONFIRM =
 export const HANDOFF_CONNECTING_NOW = "Sure, connecting you now.";
 
 const OFF_TOPIC_STEER =
-  "I'm here for SNU admissions — faculties, requirements, fees, the entrance exam, or checking an application. What would you like to know?";
+  "I can only help with SNU admissions — faculties, requirements, fees, the entrance exam, or checking an application. If you'd like, I can connect you with a human admin.";
 
 export function isLowConfidence(
   topSimilarity: number | null | undefined,
@@ -93,7 +93,13 @@ export function isClearlyOffTopic(
 
   if (clearlyUnrelated) return true;
   if (isAdmissionsOnTopic(message, intent)) return false;
-  return false;
+
+  // General-knowledge questions (e.g. "What is the capital of France?")
+  return (
+    /\b(capital(\s+city)?|president|prime minister|population|currency|flag)\s+of\b/i.test(
+      t,
+    ) || /^\s*what(?:'s| is)\s+\d+\s*[-+*x×÷/]\s*\d+/i.test(t)
+  );
 }
 
 export function offTopicSteerMessage(): string {

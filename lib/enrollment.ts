@@ -89,6 +89,44 @@ export async function upsertEnrollment(data: EnrollmentData): Promise<void> {
   payload.current_step = currentStepForEnrollment(payload);
 
   if (payload.phone) {
+    // A phone-less draft saved at step 1 for this conversation: fill it in
+    // rather than creating a second row for the same conversation.
+    if (payload.conversation_id) {
+      const { data: draft } = await supabase
+        .from("students")
+        .select("id")
+        .eq("conversation_id", payload.conversation_id)
+        .is("phone", null)
+        .maybeSingle();
+
+      if (draft) {
+        const { data: sameNumber } = await supabase
+          .from("students")
+          .select("phone")
+          .eq("phone", payload.phone)
+          .maybeSingle();
+
+        if (!sameNumber) {
+          const { error } = await supabase
+            .from("students")
+            .update(payload)
+            .eq("conversation_id", payload.conversation_id)
+            .is("phone", null);
+          if (error) throw new Error(`enrollment update failed: ${error.message}`);
+          return;
+        }
+
+        // This number already has an application: drop the empty draft and
+        // continue on the existing row (the payload carries the draft's fields).
+        const { error } = await supabase
+          .from("students")
+          .delete()
+          .eq("conversation_id", payload.conversation_id)
+          .is("phone", null);
+        if (error) throw new Error(`enrollment update failed: ${error.message}`);
+      }
+    }
+
     // Phone known — upsert on phone
     const { error } = await supabase
       .from("students")
@@ -110,7 +148,14 @@ export async function upsertEnrollment(data: EnrollmentData): Promise<void> {
       if (error) throw new Error(`enrollment update failed: ${error.message}`);
     } else {
       const { error } = await supabase.from("students").insert(payload);
-      if (error) throw new Error(`enrollment insert failed: ${error.message}`);
+      // Step 1 has no phone yet. If the database still requires one
+      // (23502 = not-null violation), skip the early save: the form resends
+      // every answer so far with the phone at step 2, and the row is created then.
+      const phoneRequired =
+        error?.code === "23502" && /"phone"/.test(error.message ?? "");
+      if (error && !phoneRequired) {
+        throw new Error(`enrollment insert failed: ${error.message}`);
+      }
     }
   }
 }
